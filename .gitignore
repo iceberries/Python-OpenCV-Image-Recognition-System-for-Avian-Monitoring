@@ -1,0 +1,36 @@
+# eclipse
+bin
+*.launch
+.settings
+.metadata
+.classpath
+.project
+
+# idea
+out
+*.ipr
+*.iws
+*.iml
+.idea
+*.log
+
+# gradle
+build
+.gradle
+
+# other
+eclipse
+run/
+run-data/
+CUB_200_2011/
+*.hprof
+*.nphd
+*.ref
+*.map
+
+#vscode
+.vscode/
+.history/
+
+generated/
+build/
