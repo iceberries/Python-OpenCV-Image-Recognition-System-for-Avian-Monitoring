@@ -16,7 +16,7 @@ from torchvision import models
 
 from tqdm import tqdm
 
-import config
+from src import config
 
 
 class ResNet50BirdClassifier(nn.Module):
@@ -89,14 +89,14 @@ class Trainer:
     ):
         self.model = model
         self.device = device or config.DEVICE
-        self.model.to(self.device)
         self.output_dir = output_dir or config.OUTPUT_DIR
 
         # 确定实际可用设备
         if self.device == "cuda" and not torch.cuda.is_available():
             print("CUDA 不可用, 自动切换到 CPU")
             self.device = "cpu"
-            self.model.to(self.device)
+
+        self.model.to(self.device)
 
         # 损失函数
         self.criterion = nn.CrossEntropyLoss()

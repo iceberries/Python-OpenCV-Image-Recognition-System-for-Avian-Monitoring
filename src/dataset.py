@@ -15,8 +15,8 @@ import cv2
 import skimage
 from skimage import exposure
 
-import config
-from preprocessing import (
+from src import config
+from src.preprocessing import (
     crop_by_bounding_box,
     resize_image,
     normalize_image,
@@ -113,37 +113,42 @@ class CUB200Dataset(Dataset):
         return len(self.image_paths)
 
     def __getitem__(self, idx: int) -> tuple:
-        # 1. 使用 Pillow 读取图像
-        image_path = os.path.join(self.images_dir, self.image_paths[idx])
-        image = Image.open(image_path).convert("RGB")
-        image = np.array(image)  # H x W x C, uint8, RGB
+        try:
+            # 1. 使用 Pillow 读取图像
+            image_path = os.path.join(self.images_dir, self.image_paths[idx])
+            image = Image.open(image_path).convert("RGB")
+            image = np.array(image)  # H x W x C, uint8, RGB
 
-        # 2. 获取标注信息
-        label = self.labels[idx]
-        bbox = self.bboxes[idx]
+            # 2. 获取标注信息
+            label = self.labels[idx]
+            bbox = self.bboxes[idx]
 
-        # 3. 使用 OpenCV 按边界框裁剪
-        if self.use_bounding_box:
-            image = crop_by_bounding_box(image, bbox)
+            # 3. 使用 OpenCV 按边界框裁剪
+            if self.use_bounding_box:
+                image = crop_by_bounding_box(image, bbox)
 
-        # 4. 调整大小到模型输入尺寸
-        image = resize_image(image, config.INPUT_SIZE)
+            # 4. 调整大小到模型输入尺寸
+            image = resize_image(image, config.INPUT_SIZE)
 
-        # 5. 数据增强 (使用 scikit-image 和 OpenCV)
-        if self.use_augmentation:
-            image = apply_data_augmentation(image)
+            # 5. 数据增强 (使用 scikit-image 和 OpenCV)
+            if self.use_augmentation:
+                image = apply_data_augmentation(image)
 
-        # 6. 归一化
-        image = normalize_image(image)
+            # 6. 归一化
+            image = normalize_image(image)
 
-        # 7. 转为 PyTorch Tensor (C x H x W)
-        image = to_tensor(image)
+            # 7. 转为 PyTorch Tensor (C x H x W)
+            image = to_tensor(image)
 
-        # 8. 额外的 torchvision transforms (可选)
-        if self.transform is not None:
-            image = self.transform(image)
+            # 8. 额外的 torchvision transforms (可选)
+            if self.transform is not None:
+                image = self.transform(image)
 
-        return image, label
+            return image, label
+        except Exception as e:
+            # 出错时返回第一张图作为兜底, 避免训练中断
+            print(f"\n警告: 加载图像失败 {self.image_paths[idx]}: {e}, 使用兜底图像")
+            return self.__getitem__(0)
 
 
 def get_class_names(root_dir: str) -> list:

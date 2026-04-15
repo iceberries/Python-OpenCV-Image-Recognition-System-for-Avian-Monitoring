@@ -29,7 +29,7 @@ import skimage
 from skimage import exposure, transform, filters, restoration
 import random
 
-import config
+from src import config
 
 # ImageNet 归一化参数 (与 torchvision transforms.Normalize 一致)
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -834,6 +834,9 @@ def apply_data_augmentation(image: np.ndarray) -> np.ndarray:
     7. 随机轻微旋转
     8. 随机高斯噪声
 
+    注意: 如果需要注意力引导形变, 请使用 AttentionGuidedAugmentor,
+    参见 attention_deform.py
+
     Args:
         image: (H, W, C), uint8, RGB
 
@@ -884,3 +887,25 @@ def apply_data_augmentation(image: np.ndarray) -> np.ndarray:
         image = random_gaussian_noise(image, std_range=(3, 15))
 
     return image
+
+
+def apply_attention_guided_augmentation(image: np.ndarray,
+                                         augmentor=None,
+                                         prob: float = 0.3) -> np.ndarray:
+    """
+    注意力引导的定向形变增强
+
+    使用 Grad-CAM 获取注意力图, 然后有概率地应用注意力引导的形变。
+    如果 augmentor 为 None (模型尚未加载), 则退化为普通增强。
+
+    Args:
+        image: (H, W, C), uint8, RGB
+        augmentor: AttentionGuidedAugmentor 实例 (可选)
+        prob: 应用注意力引导增强的概率
+
+    Returns:
+        增强后的图像
+    """
+    if augmentor is not None and random.random() < prob:
+        return augmentor.auto(image)
+    return apply_data_augmentation(image)
