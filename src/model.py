@@ -198,60 +198,59 @@ class Trainer:
         val_acc = 100.0 * correct / total
         return val_loss, val_acc, np.array(all_preds), np.array(all_labels)
 
-    def fit(self, train_loader, val_loader, num_epochs: int = None) -> dict:
+    def fit(self, train_loader, val_loader, num_epochs: int = None, start_epoch: int = 0) -> dict:
         """
-        完整训练流程 (两阶段微调)
-
-        阶段1: 冻结 backbone, 训练分类头 (5 epochs)
-        阶段2: 解冻全部参数, 全网络微调
-
-        Returns:
-            训练历史记录
+        完整训练流程 (支持恢复训练)
         """
         if num_epochs is None:
             num_epochs = config.NUM_EPOCHS
 
+        # ========== 关键修复：计算真实的结束 epoch ==========
+        end_epoch = start_epoch + num_epochs
+        stage1_epochs = min(5, end_epoch)
+
         total_start = time.time()
 
-        # === 阶段1: 冻结 backbone, 训练分类头 ===
-        print("\n" + "=" * 60)
-        print("阶段 1: 冻结 backbone, 训练分类头")
-        print("=" * 60)
-        self.model.freeze_backbone()
-        self.optimizer = optim.AdamW(
-            filter(lambda p: p.requires_grad, self.model.parameters()),
-            lr=config.LEARNING_RATE,
-            weight_decay=config.WEIGHT_DECAY,
-        )
-        self.scheduler = optim.lr_scheduler.StepLR(
-            self.optimizer,
-            step_size=5,
-            gamma=config.LR_GAMMA,
-        )
+        # === 阶段1: 冻结 backbone ===
+        if start_epoch < stage1_epochs:
+            print("\n" + "=" * 60)
+            print("阶段 1: 冻结 backbone, 训练分类头")
+            print("=" * 60)
+            self.model.freeze_backbone()
+            self.optimizer = optim.AdamW(
+                filter(lambda p: p.requires_grad, self.model.parameters()),
+                lr=config.LEARNING_RATE,
+                weight_decay=config.WEIGHT_DECAY,
+            )
+            self.scheduler = optim.lr_scheduler.StepLR(
+                self.optimizer,
+                step_size=5,
+                gamma=config.LR_GAMMA,
+            )
 
-        stage1_epochs = min(5, num_epochs)
-        for epoch in range(1, stage1_epochs + 1):
-            self._train_epoch(train_loader, val_loader, epoch, stage1_epochs)
+            for epoch in range(start_epoch + 1, stage1_epochs + 1):
+                self._train_epoch(train_loader, val_loader, epoch, end_epoch)
 
         # === 阶段2: 全网络微调 ===
-        print("\n" + "=" * 60)
-        print("阶段 2: 解冻全部参数, 全网络微调")
-        print("=" * 60)
-        self.model.unfreeze_backbone()
-        self.optimizer = optim.AdamW(
-            self.model.parameters(),
-            lr=config.LEARNING_RATE * 0.1,  # 降低学习率
-            weight_decay=config.WEIGHT_DECAY,
-        )
-        self.scheduler = optim.lr_scheduler.StepLR(
-            self.optimizer,
-            step_size=config.LR_STEP_SIZE,
-            gamma=config.LR_GAMMA,
-        )
+        if end_epoch > stage1_epochs:
+            print("\n" + "=" * 60)
+            print("阶段 2: 解冻全部参数, 全网络微调")
+            print("=" * 60)
+            self.model.unfreeze_backbone()
+            self.optimizer = optim.AdamW(
+                self.model.parameters(),
+                lr=config.LEARNING_RATE * 0.1,
+                weight_decay=config.WEIGHT_DECAY,
+            )
+            self.scheduler = optim.lr_scheduler.StepLR(
+                self.optimizer,
+                step_size=config.LR_STEP_SIZE,
+                gamma=config.LR_GAMMA,
+            )
 
-        stage2_epochs = num_epochs - stage1_epochs
-        for epoch in range(stage1_epochs + 1, num_epochs + 1):
-            self._train_epoch(train_loader, val_loader, epoch, num_epochs)
+            stage2_start = max(stage1_epochs, start_epoch)
+            for epoch in range(stage2_start + 1, end_epoch + 1):
+                self._train_epoch(train_loader, val_loader, epoch, end_epoch)
 
         total_time = time.time() - total_start
         print(f"\n训练完成! 总耗时: {total_time / 60:.1f} 分钟")
@@ -264,7 +263,6 @@ class Trainer:
             "best_accuracy": self.best_accuracy,
             "best_epoch": self.best_epoch,
         }
-
     def _train_epoch(self, train_loader, val_loader, epoch: int, total_epochs: int):
         """单个 epoch 的训练和验证"""
         print(f"\nEpoch [{epoch}/{total_epochs}]")

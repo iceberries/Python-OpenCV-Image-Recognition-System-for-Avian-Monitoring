@@ -1,11 +1,5 @@
 """
 鸟类图像识别系统 - 主程序入口
-
-使用方法:
-    python -m src.main              # 使用默认参数训练
-    python -m src.main --epochs 50  # 指定训练轮次
-    python -m src.main --eval       # 仅评估 (需已有模型权重)
-    python -m src.main --batch_size 64  # 指定批次大小
 """
 
 import os
@@ -16,18 +10,16 @@ import numpy as np
 
 import torch
 
-# 确保项目根目录在 sys.path 中
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 import src.config as config
-from src.dataset import create_dataloaders, get_class_names
+from src.dataset import create_dataloaders
 from src.model import ResNet50BirdClassifier, Trainer
 
 
 def set_seed(seed: int = 42):
-    """设置随机种子, 保证实验可复现"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -39,57 +31,36 @@ def set_seed(seed: int = 42):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="CUB-200-2011 鸟类图像识别系统 (ResNet50)")
+    parser = argparse.ArgumentParser(description="CUB-200-2011 鸟类图像识别系统")
 
-    # 数据参数
-    parser.add_argument("--data_dir", type=str, default=None,
-                        help="数据集根目录 (默认自动检测)")
-    parser.add_argument("--batch_size", type=int, default=config.BATCH_SIZE,
-                        help=f"批次大小 (默认: {config.BATCH_SIZE})")
-    parser.add_argument("--num_workers", type=int, default=config.NUM_WORKERS,
-                        help=f"DataLoader 工作线程数 (默认: {config.NUM_WORKERS})")
+    parser.add_argument("--data_dir", type=str, default=None)
+    parser.add_argument("--batch_size", type=int, default=config.BATCH_SIZE)
+    parser.add_argument("--num_workers", type=int, default=config.NUM_WORKERS)
+    parser.add_argument("--epochs", type=int, default=config.NUM_EPOCHS)
+    parser.add_argument("--lr", type=float, default=config.LEARNING_RATE)
+    parser.add_argument("--weight_decay", type=float, default=config.WEIGHT_DECAY)
+    parser.add_argument("--seed", type=int, default=config.RANDOM_SEED)
 
-    # 训练参数
-    parser.add_argument("--epochs", type=int, default=config.NUM_EPOCHS,
-                        help=f"训练轮次 (默认: {config.NUM_EPOCHS})")
-    parser.add_argument("--lr", type=float, default=config.LEARNING_RATE,
-                        help=f"初始学习率 (默认: {config.LEARNING_RATE})")
-    parser.add_argument("--weight_decay", type=float, default=config.WEIGHT_DECAY,
-                        help=f"权重衰减 (默认: {config.WEIGHT_DECAY})")
-    parser.add_argument("--seed", type=int, default=config.RANDOM_SEED,
-                        help=f"随机种子 (默认: {config.RANDOM_SEED})")
-
-    # 模式选项
-    parser.add_argument("--eval", action="store_true",
-                        help="仅评估模式 (需已有模型权重)")
-    parser.add_argument("--checkpoint", type=str, default=None,
-                        help="模型权重路径 (默认使用最佳模型)")
-    parser.add_argument("--no_bbox", action="store_true",
-                        help="不使用边界框裁剪")
-    parser.add_argument("--no_aug", action="store_true",
-                        help="不使用数据增强")
-
-    # 模型选项
-    parser.add_argument("--no_pretrained", action="store_true",
-                        help="不使用预训练权重 (从头训练)")
-    parser.add_argument("--num_classes", type=int, default=config.NUM_CLASSES,
-                        help=f"类别数 (默认: {config.NUM_CLASSES})")
+    parser.add_argument("--eval", action="store_true")
+    parser.add_argument("--checkpoint", type=str, default=None)
+    parser.add_argument("--resume", type=str, default=None,
+                        help="恢复训练的检查点路径")
+    parser.add_argument("--no_bbox", action="store_true")
+    parser.add_argument("--no_aug", action="store_true")
+    parser.add_argument("--no_pretrained", action="store_true")
+    parser.add_argument("--num_classes", type=int, default=config.NUM_CLASSES)
 
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-
-    # 设置随机种子
     set_seed(args.seed)
 
-    # 显示训练配置
     print("=" * 60)
     print("  CUB-200-2011 鸟类图像识别系统")
     print("  模型: ResNet50 (迁移学习)")
     print("=" * 60)
-    print(f"  数据集目录:     {args.data_dir or config.DATASET_ROOT}")
     print(f"  批次大小:       {args.batch_size}")
     print(f"  训练轮次:       {args.epochs}")
     print(f"  学习率:         {args.lr}")
@@ -101,20 +72,16 @@ def main():
         print(f"  GPU:            {torch.cuda.get_device_name(0)}")
     print("=" * 60)
 
-    # 更新配置
     config.BATCH_SIZE = args.batch_size
     config.LEARNING_RATE = args.lr
     config.WEIGHT_DECAY = args.weight_decay
     config.NUM_EPOCHS = args.epochs
 
-    # 数据集路径
     data_dir = args.data_dir if args.data_dir else config.DATASET_ROOT
     if not os.path.exists(os.path.join(data_dir, "images")):
-        print(f"错误: 数据集目录不存在或结构不正确: {data_dir}")
-        print(f"请确保路径下存在 images/ 文件夹")
+        print(f"错误: 数据集目录不存在: {data_dir}")
         sys.exit(1)
 
-    # 加载数据
     print("\n加载数据集...")
     train_loader, test_loader, class_names = create_dataloaders(
         root_dir=data_dir,
@@ -123,15 +90,37 @@ def main():
         use_bounding_box=not args.no_bbox,
         use_augmentation=not args.no_aug,
     )
-    print(f"训练集: {len(train_loader.dataset)} 张图像, {len(train_loader)} 个批次")
-    print(f"测试集: {len(test_loader.dataset)} 张图像, {len(test_loader)} 个批次")
+    print(f"训练集: {len(train_loader.dataset)} 张图像")
+    print(f"测试集: {len(test_loader.dataset)} 张图像")
 
-    # 构建模型
     print("\n构建 ResNet50 模型...")
     model = ResNet50BirdClassifier(
         num_classes=args.num_classes,
         pretrained=not args.no_pretrained,
     )
+
+    # ========== 恢复训练逻辑（修复版）==========
+    start_epoch = 0
+    resume_checkpoint = None
+    
+    if args.resume:
+        if os.path.exists(args.resume):
+            print(f"\n恢复训练: 加载检查点 {args.resume}")
+            resume_checkpoint = torch.load(args.resume, map_location=config.DEVICE)
+            model.load_state_dict(resume_checkpoint['model_state_dict'])
+            
+            start_epoch = resume_checkpoint.get('best_epoch', 0)
+            best_acc = resume_checkpoint.get('best_accuracy', 0.0)
+            print(f"  ✓ 已加载模型权重 (原最佳: {best_acc:.2f}%, Epoch {start_epoch})")
+            
+            # 微调模式：降低学习率
+            original_lr = args.lr
+            args.lr = args.lr * 0.1
+            config.LEARNING_RATE = args.lr
+            print(f"  ✓ 学习率调整: {original_lr} -> {args.lr}")
+        else:
+            print(f"警告: 检查点不存在: {args.resume}")
+
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"总参数量: {total_params:,}")
@@ -140,37 +129,38 @@ def main():
     # 创建训练器
     trainer = Trainer(model=model, output_dir=config.OUTPUT_DIR)
 
+    # 恢复训练器状态（防止覆盖最佳模型）
+    if resume_checkpoint:
+        if 'optimizer_state_dict' in resume_checkpoint:
+            trainer.optimizer.load_state_dict(resume_checkpoint['optimizer_state_dict'])
+        trainer.best_accuracy = resume_checkpoint.get('best_accuracy', 0.0)
+        trainer.best_epoch = resume_checkpoint.get('best_epoch', 0)
+        print(f"  ✓ 已恢复训练状态 (best_acc={trainer.best_accuracy:.2f}%)")
+
     # 评估模式
     if args.eval:
-        checkpoint_path = args.checkpoint
-        if checkpoint_path is None:
-            checkpoint_path = os.path.join(config.OUTPUT_DIR, "best_model.pth")
+        checkpoint_path = args.checkpoint or os.path.join(config.OUTPUT_DIR, "best_model.pth")
         if not os.path.exists(checkpoint_path):
             print(f"错误: 模型文件不存在: {checkpoint_path}")
             sys.exit(1)
         trainer.load_model(checkpoint_path)
-        val_loss, val_acc, preds, labels = trainer.validate(test_loader)
+        val_loss, val_acc, _, _ = trainer.validate(test_loader)
         print(f"\n测试集结果: Loss={val_loss:.4f}, Accuracy={val_acc:.2f}%")
         return
 
     # 训练
-    print("\n开始训练...")
-    history = trainer.fit(train_loader, test_loader, num_epochs=args.epochs)
+    print(f"\n开始训练 (从 Epoch {start_epoch + 1} 开始)...")
+    history = trainer.fit(train_loader, test_loader, num_epochs=args.epochs, start_epoch=start_epoch)
 
     # 最终评估
     print("\n最终评估...")
-    checkpoint_path = os.path.join(config.OUTPUT_DIR, "best_model.pth")
-    trainer.load_model(checkpoint_path)
-    val_loss, val_acc, preds, labels = trainer.validate(test_loader)
-    print(f"\n最终测试集结果: Loss={val_loss:.4f}, Accuracy={val_acc:.2f}%")
-
-    # 打印 Top-5 准确率
-    print(f"\n训练历史:")
-    for epoch, (loss, acc) in enumerate(
-        zip(history["val_losses"], history["val_accuracies"]), 1
-    ):
-        marker = " *" if acc == max(history["val_accuracies"]) else ""
-        print(f"  Epoch {epoch:3d}: Val Loss={loss:.4f}, Val Acc={acc:.2f}%{marker}")
+    best_path = os.path.join(config.OUTPUT_DIR, "best_model.pth")
+    if os.path.exists(best_path):
+        trainer.load_model(best_path)
+        val_loss, val_acc, _, _ = trainer.validate(test_loader)
+        print(f"\n最终测试集结果: Loss={val_loss:.4f}, Accuracy={val_acc:.2f}%")
+    else:
+        print("警告: 未找到最佳模型文件")
 
 
 if __name__ == "__main__":
