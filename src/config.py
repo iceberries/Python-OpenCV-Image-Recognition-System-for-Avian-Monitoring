@@ -36,12 +36,12 @@ INPUT_SIZE = 224
 BATCH_SIZE = 32
 
 # 训练轮次
-NUM_EPOCHS = 30
+NUM_EPOCHS = 50
 
 # 初始学习率
 LEARNING_RATE = 0.001
 
-# 学习率衰减因子
+# 学习率衰减因子 (用于StepLR, CosineAnnealing不使用)
 LR_STEP_SIZE = 10
 LR_GAMMA = 0.1
 
@@ -50,6 +50,30 @@ WEIGHT_DECAY = 1e-4
 
 # 预训练权重
 PRETRAINED = True
+
+# ==================== 改进配置 ====================
+# Label Smoothing
+LABEL_SMOOTHING = 0.1
+
+# Mixup增强参数
+MIXUP_ALPHA = 0.4
+
+# CutMix增强参数  
+CUTMIX_ALPHA = 1.0
+CUTMIX_PROB = 0.5
+
+# 测试时增强(TTA)
+USE_TTA = True
+TTA_SCALES = [0.875, 1.0, 1.125]  # 多尺度测试
+
+# 使用SE-Net注意力增强
+USE_SE_ATTENTION = True
+
+# 使用Cosine Annealing学习率调度
+USE_COSINE_LR = True
+
+# 权重衰减分层策略 (backbone使用更小的weight decay)
+BACKBONE_WEIGHT_DECAY = 1e-5
 
 # ==================== 数据增强配置 ====================
 # 训练集随机裁剪尺寸

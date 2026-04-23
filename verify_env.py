@@ -46,7 +46,7 @@ except Exception as e:
 results.append(check("matplotlib", "import matplotlib"))
 results.append(check("tqdm", "import tqdm"))
 results.append(check("scipy", "import scipy"))
-results.append(check("PyWavelets", "import PyWavelets"))
+results.append(check("PyWavelets", "import pywt"))
 
 # OpenCV 运行时测试
 print("\n--- 运行时功能测试 ---")

@@ -1,7 +1,8 @@
 """
 鸟类图像识别 - 预测/推理模块
 
-使用训练好的 ResNet50 模型对单张图像或目录下所有图像进行预测。
+使用训练好的 ResNet50 + SE-Net 模型对单张图像或目录下所有图像进行预测。
+支持测试时增强 (TTA) 提升预测准确率。
 
 使用方法:
     # 预测单张图像
@@ -12,6 +13,8 @@
     python -m src.predict --image path/to/bird.jpg --checkpoint output/best_model.pth
     # 显示 Top-K 结果
     python -m src.predict --image path/to/bird.jpg --top_k 10
+    # 使用 TTA 提升准确率
+    python -m src.predict --image path/to/bird.jpg --tta
 """
 
 import os
@@ -21,6 +24,7 @@ from glob import glob
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import cv2
 from PIL import Image
 
@@ -30,16 +34,17 @@ if PROJECT_ROOT not in sys.path:
 
 import src.config as config
 from src.dataset import get_class_names
-from src.model import ResNet50BirdClassifier, Trainer
+from src.model import ResNet50BirdClassifier, Trainer, TestTimeAugmentation
 from src.preprocessing import resize_image, normalize_image, to_tensor, apply_clahe
 
 
-def load_and_preprocess_image(image_path: str) -> torch.Tensor:
+def load_and_preprocess_image(image_path: str, use_clahe: bool = True) -> torch.Tensor:
     """
     加载并预处理单张图像用于预测
 
     Args:
         image_path: 图像文件路径
+        use_clahe: 是否使用 CLAHE 对比度增强
 
     Returns:
         预处理后的 Tensor (1, C, H, W)
@@ -52,7 +57,8 @@ def load_and_preprocess_image(image_path: str) -> torch.Tensor:
     image = resize_image(image, config.INPUT_SIZE)
 
     # 使用 CLAHE 增强对比度
-    image = apply_clahe(image, clip_limit=2.0)
+    if use_clahe:
+        image = apply_clahe(image, clip_limit=2.0)
 
     # 归一化
     image = normalize_image(image)
@@ -70,6 +76,7 @@ def predict_single(
     class_names: list,
     device: str,
     top_k: int = 5,
+    use_tta: bool = False,
 ) -> list:
     """
     对单张图像进行预测
@@ -80,6 +87,7 @@ def predict_single(
         class_names: 类别名称列表
         device: 推理设备
         top_k: 返回前 K 个预测结果
+        use_tta: 是否使用测试时增强
 
     Returns:
         [(class_name, probability), ...] 排序后的预测结果
@@ -90,8 +98,13 @@ def predict_single(
     # 推理
     model.eval()
     with torch.no_grad():
-        outputs = model(tensor)
-        probabilities = torch.softmax(outputs, dim=1)
+        if use_tta:
+            # 使用 TTA
+            tta = TestTimeAugmentation(model, device)
+            probabilities = tta.predict(tensor)
+        else:
+            outputs = model(tensor)
+            probabilities = torch.softmax(outputs, dim=1)
 
     # 获取 Top-K 结果
     top_probs, top_indices = probabilities.topk(top_k, dim=1)
@@ -112,6 +125,7 @@ def predict_directory(
     class_names: list,
     device: str,
     top_k: int = 5,
+    use_tta: bool = False,
 ) -> dict:
     """
     对目录下所有图像进行预测
@@ -122,6 +136,7 @@ def predict_directory(
         class_names: 类别名称列表
         device: 推理设备
         top_k: 返回前 K 个预测结果
+        use_tta: 是否使用测试时增强
 
     Returns:
         {image_path: [(class_name, probability), ...]}
@@ -139,7 +154,7 @@ def predict_directory(
     for i, image_path in enumerate(image_files, 1):
         print(f"\n[{i}/{len(image_files)}] {os.path.basename(image_path)}")
         try:
-            preds = predict_single(model, image_path, class_names, device, top_k)
+            preds = predict_single(model, image_path, class_names, device, top_k, use_tta)
             results[image_path] = preds
             for rank, (name, prob) in enumerate(preds, 1):
                 print(f"  {rank}. {name} ({prob:.2f}%)")
@@ -201,7 +216,7 @@ def visualize_prediction(image_path: str, results: list, save_path: str = None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="鸟类图像预测")
+    parser = argparse.ArgumentParser(description="鸟类图像预测 (支持 TTA)")
 
     parser.add_argument("--image", type=str, default=None,
                         help="单张图像路径")
@@ -214,6 +229,10 @@ def main():
                         help="数据集根目录 (用于获取类别名称)")
     parser.add_argument("--top_k", type=int, default=5,
                         help="显示 Top-K 预测结果 (默认: 5)")
+    parser.add_argument("--tta", action="store_true",
+                        help="使用测试时增强 (TTA) 提升准确率")
+    parser.add_argument("--no_se", action="store_true",
+                        help="模型不使用 SE-Net 注意力模块")
     parser.add_argument("--visualize", action="store_true",
                         help="可视化预测结果")
     parser.add_argument("--save_dir", type=str, default=None,
@@ -238,17 +257,23 @@ def main():
     if device == "cuda" and not torch.cuda.is_available():
         device = "cpu"
 
-    model = ResNet50BirdClassifier(num_classes=config.NUM_CLASSES, pretrained=False)
+    model = ResNet50BirdClassifier(
+        num_classes=config.NUM_CLASSES,
+        pretrained=False,
+        use_se=not args.no_se,
+    )
     trainer = Trainer(model=model, device=device)
     trainer.load_model(args.checkpoint)
 
     print(f"\n使用设备: {device}")
+    print(f"SE-Net 注意力: {'是' if not args.no_se else '否'}")
+    print(f"测试时增强 (TTA): {'是' if args.tta else '否'}")
     print("=" * 60)
 
     # 单张图像预测
     if args.image:
         print(f"\n预测图像: {args.image}")
-        results = predict_single(model, args.image, class_names, device, args.top_k)
+        results = predict_single(model, args.image, class_names, device, args.top_k, args.tta)
         print(f"\nTop-{args.top_k} 预测结果:")
         for rank, (name, prob) in enumerate(results, 1):
             marker = " <--" if rank == 1 else ""
@@ -264,7 +289,7 @@ def main():
 
     # 目录预测
     if args.dir:
-        predict_directory(model, args.dir, class_names, device, args.top_k)
+        predict_directory(model, args.dir, class_names, device, args.top_k, args.tta)
 
 
 if __name__ == "__main__":
