@@ -33,6 +33,14 @@ output/
 #vscode
 .vscode/
 .history/
+config/
+examples/
+skills/
+tests/
+.pytest_cache/
+pages/__pycache__
+ui/__pycache__
+ui/pages/__pycache__
 
 generated/
 build/
