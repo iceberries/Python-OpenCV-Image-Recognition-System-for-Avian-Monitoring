@@ -1,16 +1,20 @@
 """
 主窗口 - 侧边栏导航 + 内容区页面切换
+集成 ScaleManager 实现窗口缩放自适应
 """
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QPushButton, QStackedWidget, QStatusBar,
-    QFrame, QSizePolicy,
+    QFrame, QSizePolicy, QApplication,
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QSize
 from PyQt5.QtGui import QFont
 
-from ui.styles import GLOBAL_QSS, NAV_ICONS, PRIMARY_COLOR
-from ui.event_bus import EventBus
+from src.ui.styles import build_scaled_qss, NAV_ICONS, PRIMARY_COLOR
+from src.ui.event_bus import EventBus
+from src.ui.scale_manager import ScaleManager
+from src.core.app_state import AppState
+from src.core.model_manager import ModelManager
 
 
 class NavButton(QPushButton):
@@ -44,25 +48,32 @@ class Sidebar(QFrame):
 
     nav_changed = pyqtSignal(str)
 
+    # 基准宽度（scale=1.0 时的值）
+    BASE_WIDTH = 200
+
     def __init__(self, page_names: list, parent=None):
         super().__init__(parent)
         self.setObjectName("Sidebar")
-        self.setFixedWidth(200)
+        self._base_width = self.BASE_WIDTH
+
+        sm = ScaleManager.get()
+        scaled_w = sm.scale_int(self._base_width)
+        self.setFixedWidth(scaled_w)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         # Logo
-        logo = QLabel("🐦 鸟类识别")
-        logo.setObjectName("SidebarLogo")
-        logo.setAlignment(Qt.AlignCenter)
-        layout.addWidget(logo)
+        self.logo = QLabel("🐦 鸟类识别")
+        self.logo.setObjectName("SidebarLogo")
+        self.logo.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.logo)
 
-        subtitle = QLabel("Avian Monitoring")
-        subtitle.setObjectName("SidebarSubtitle")
-        subtitle.setAlignment(Qt.AlignCenter)
-        layout.addWidget(subtitle)
+        self.subtitle = QLabel("Avian Monitoring")
+        self.subtitle.setObjectName("SidebarSubtitle")
+        self.subtitle.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.subtitle)
 
         # 分割线
         divider = QFrame()
@@ -119,6 +130,11 @@ class Sidebar(QFrame):
     def set_device_info(self, info: str):
         self.status_label.setText(f"🖥️ {info}")
 
+    def apply_scale(self, scale: float):
+        """缩放侧边栏宽度"""
+        sm = ScaleManager.get()
+        self.setFixedWidth(sm.scale_int(self._base_width))
+
 
 class MainWindow(QMainWindow):
     """主窗口"""
@@ -130,11 +146,17 @@ class MainWindow(QMainWindow):
         """
         super().__init__(parent)
         self.setWindowTitle("鸟类图像识别系统")
-        self.setMinimumSize(1100, 700)
-        self.resize(1280, 800)
+        self.setMinimumSize(900, 600)
 
-        # 应用全局样式
-        self.setStyleSheet(GLOBAL_QSS)
+        # 初始化 ScaleManager（使用屏幕尺寸作为基准）
+        sm = ScaleManager.get()
+        screen = QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            sm.init(QSize(available.width(), available.height()))
+
+        # 应用初始样式
+        self.setStyleSheet(build_scaled_qss(sm.scale_factor))
 
         # 中心部件
         central = QWidget()
@@ -173,6 +195,10 @@ class MainWindow(QMainWindow):
         bus.nav_requested.connect(self._switch_page)
         bus.model_loaded.connect(self.sidebar.set_model_status)
 
+        # 连接全局状态 - 模型状态变更更新状态栏
+        AppState.get().modelStatusChanged.connect(self._on_model_status_changed)
+        AppState.get().inferencingChanged.connect(self._on_inferencing_changed)
+
     def _switch_page(self, page_name: str):
         idx = self._page_map.get(page_name)
         if idx is not None:
@@ -182,9 +208,53 @@ class MainWindow(QMainWindow):
             self.sidebar._update_selection(page_name)
 
     def _init_device_info(self):
-        import torch
-        if torch.cuda.is_available():
-            device_name = torch.cuda.get_device_name(0)
-            self.sidebar.set_device_info(f"CUDA: {device_name[:20]}")
+        try:
+            import torch
+            if torch.cuda.is_available():
+                device_name = torch.cuda.get_device_name(0)
+                self.sidebar.set_device_info(f"CUDA: {device_name[:20]}")
+            else:
+                self.sidebar.set_device_info("CPU")
+        except ImportError:
+            self.sidebar.set_device_info("CPU (PyTorch 未安装)")
+
+    def _on_model_status_changed(self, ready: bool, model_name: str):
+        """全局模型状态变更 - 更新状态栏"""
+        if ready:
+            self.status_bar.showMessage(f"模型就绪: {model_name}")
         else:
-            self.sidebar.set_device_info("CPU")
+            self.status_bar.showMessage("模型未加载")
+
+    def _on_inferencing_changed(self, inferencing: bool):
+        """推理状态变更 - 更新状态栏"""
+        if inferencing:
+            self.status_bar.showMessage("推理中...")
+        else:
+            manager = ModelManager.get()
+            if manager.is_ready:
+                self.status_bar.showMessage("就绪")
+            else:
+                self.status_bar.showMessage("模型未加载")
+
+    def resizeEvent(self, event):
+        """窗口缩放时重新计算 scale 并更新 UI"""
+        super().resizeEvent(event)
+
+        sm = ScaleManager.get()
+        new_scale, old_scale = sm.on_resize(self.size())
+
+        if new_scale != old_scale:
+            # 1. 重新生成并应用 QSS
+            self.setStyleSheet(build_scaled_qss(new_scale))
+
+            # 2. 缩放侧边栏宽度
+            self.sidebar.apply_scale(new_scale)
+
+            # 3. 递归缩放内容区字体
+            sm.scale_widget_recursive(self.stack)
+
+            # 4. 通知各页面进行自定义缩放
+            for i in range(self.stack.count()):
+                page = self.stack.widget(i)
+                if hasattr(page, 'apply_scale'):
+                    page.apply_scale(new_scale)

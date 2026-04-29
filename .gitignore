@@ -38,9 +38,13 @@ examples/
 skills/
 tests/
 .pytest_cache/
-pages/__pycache__
-ui/__pycache__
-ui/pages/__pycache__
+src/pages/__pycache__
+src/ui/__pycache__
+src/ui/pages/__pycache__
+src/utils/__pycache__
+src/core/__pycache__
+data/
+scripts/
 
 generated/
 build/
