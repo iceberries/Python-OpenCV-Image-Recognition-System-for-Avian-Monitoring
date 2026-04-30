@@ -80,7 +80,7 @@ class FeatureCard(QFrame):
 
         layout.addStretch()
 
-        self.btn = QPushButton("进入 →")
+        self.btn = QPushButton("进入→")
         self.btn.setObjectName("PrimaryButton")
         self.btn.setCursor(Qt.PointingHandCursor)
         self.btn.setFixedWidth(sm.scale_int(self.BASE_BTN_W))

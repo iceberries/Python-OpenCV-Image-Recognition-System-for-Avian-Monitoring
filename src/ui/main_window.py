@@ -5,10 +5,10 @@
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QPushButton, QStackedWidget, QStatusBar,
-    QFrame, QSizePolicy, QApplication,
+    QFrame, QSizePolicy, QApplication,QShortcut
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QSize
-from PyQt5.QtGui import QFont
+from PyQt5.QtCore import Qt, pyqtSignal, QSize,QEvent
+from PyQt5.QtGui import QFont,QKeySequence
 
 from src.ui.styles import build_scaled_qss, NAV_ICONS, PRIMARY_COLOR
 from src.ui.event_bus import EventBus
@@ -145,6 +145,10 @@ class MainWindow(QMainWindow):
             pages: {页面名称: QWidget 实例} 字典
         """
         super().__init__(parent)
+        # 注册 F5 快捷键
+        self.shortcut_f5 = QShortcut(QKeySequence("F5"), self)
+        self.shortcut_f5.activated.connect(self._refresh_ui)
+        QApplication.instance().installEventFilter(self)
         self.setWindowTitle("鸟类图像识别系统")
         self.setMinimumSize(900, 600)
 
@@ -198,7 +202,7 @@ class MainWindow(QMainWindow):
         # 连接全局状态 - 模型状态变更更新状态栏
         AppState.get().modelStatusChanged.connect(self._on_model_status_changed)
         AppState.get().inferencingChanged.connect(self._on_inferencing_changed)
-
+    
     def _switch_page(self, page_name: str):
         idx = self._page_map.get(page_name)
         if idx is not None:
@@ -236,25 +240,34 @@ class MainWindow(QMainWindow):
             else:
                 self.status_bar.showMessage("模型未加载")
 
-    def resizeEvent(self, event):
-        """窗口缩放时重新计算 scale 并更新 UI"""
-        super().resizeEvent(event)
+    def _refresh_ui(self):
+        """强制刷新界面（重新应用样式和缩放）"""
+        sm = ScaleManager.get()
+        scale = sm.scale_factor
+        # 1. 重新应用 QSS
+        self.setStyleSheet(build_scaled_qss(scale))
+        
+        # 2. 缩放侧边栏
+        self.sidebar.apply_scale(scale)
+        
+        # 3. 递归缩放内容区字体
+        sm.scale_widget_recursive(self.stack)
+        
+        # 4. 通知各页面自定义缩放
+        for i in range(self.stack.count()):
+            page = self.stack.widget(i)
+            if hasattr(page, 'apply_scale'):
+                page.apply_scale(scale)
+        # 5. 强制重绘
+        self.repaint()
+        print(f"界面刷新（scale={scale:.2f}）")
 
+    def resizeEvent(self, event):
+        """窗口缩放时自动刷新"""
+        super().resizeEvent(event)
+        
         sm = ScaleManager.get()
         new_scale, old_scale = sm.on_resize(self.size())
-
+        
         if new_scale != old_scale:
-            # 1. 重新生成并应用 QSS
-            self.setStyleSheet(build_scaled_qss(new_scale))
-
-            # 2. 缩放侧边栏宽度
-            self.sidebar.apply_scale(new_scale)
-
-            # 3. 递归缩放内容区字体
-            sm.scale_widget_recursive(self.stack)
-
-            # 4. 通知各页面进行自定义缩放
-            for i in range(self.stack.count()):
-                page = self.stack.widget(i)
-                if hasattr(page, 'apply_scale'):
-                    page.apply_scale(new_scale)
+            self._refresh_ui()  # 复用刷新逻辑

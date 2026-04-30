@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QScrollArea, QSizePolicy, QMessageBox,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QSize
-from PyQt5.QtGui import QPixmap, QImage, QFont, QDragEnterEvent, QDropEvent
+from PyQt5.QtGui import QPixmap, QImage, QFont, QDragEnterEvent, QDropEvent, QPainter
 
 from src.ui.styles import (
     PRIMARY_COLOR, PRIMARY_LIGHT, DANGER_COLOR,
@@ -22,8 +22,67 @@ MAX_FILE_SIZE_MB = 20
 MAX_BATCH_COUNT = 50
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff"}
 THUMB_MAX_WIDTH = 400
+THUMB_MAX_HEIGHT = 400
 GRID_COLUMNS = 4
 THUMB_GRID_SIZE = 150
+
+
+class CenteredPixmapLabel(QLabel):
+    """支持 QPixmap 真正居中的 QLabel"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._source_pixmap = None
+        self._scaled_pixmap = None
+        self.setAlignment(Qt.AlignCenter)
+
+    def setPixmap(self, pixmap: QPixmap):
+        """设置图片源，自动缩放居中"""
+        self._source_pixmap = pixmap
+        self._update_scaled()
+        self.update()
+
+    def clear(self):
+        """清空图片"""
+        self._source_pixmap = None
+        self._scaled_pixmap = None
+        super().clear()  # 调用父类 clear 清除文本等
+        self.update()
+
+    def _update_scaled(self):
+        """根据当前控件尺寸重新计算缩放后的图片"""
+        if self._source_pixmap is None or self._source_pixmap.isNull():
+            self._scaled_pixmap = None
+            return
+
+        available = self.size()
+        if available.width() <= 0 or available.height() <= 0:
+            return
+
+        self._scaled_pixmap = self._source_pixmap.scaled(
+            available,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+
+    def resizeEvent(self, event):
+        """窗口大小变化时重新缩放"""
+        super().resizeEvent(event)
+        self._update_scaled()
+        self.update()
+
+    def paintEvent(self, event):
+        """自定义绘制：将缩放后的图片居中绘制"""
+        if self._scaled_pixmap is None or self._scaled_pixmap.isNull():
+            super().paintEvent(event)
+            return
+
+        x = (self.width() - self._scaled_pixmap.width()) // 2
+        y = (self.height() - self._scaled_pixmap.height()) // 2
+
+        painter = QPainter(self)
+        painter.drawPixmap(x, y, self._scaled_pixmap)
+        painter.end()
 
 
 class ThumbnailWidget(QFrame):
@@ -50,8 +109,7 @@ class ThumbnailWidget(QFrame):
         img_layout.setContentsMargins(0, 0, 0, 0)
         img_layout.setSpacing(0)
 
-        self.thumb_label = QLabel()
-        self.thumb_label.setAlignment(Qt.AlignCenter)
+        self.thumb_label = CenteredPixmapLabel()
         self.thumb_label.setFixedSize(THUMB_GRID_SIZE, THUMB_GRID_SIZE)
         self.thumb_label.setStyleSheet(f"border-radius: 4px; background: {BG_COLOR};")
         img_layout.addWidget(self.thumb_label)
@@ -116,15 +174,11 @@ class ThumbnailWidget(QFrame):
         )
         self.setToolTip(self._info_text)
 
-        scaled = pixmap.scaled(
-            THUMB_GRID_SIZE, THUMB_GRID_SIZE,
-            Qt.KeepAspectRatio, Qt.SmoothTransformation,
-        )
-        self.thumb_label.setPixmap(scaled)
+        self.thumb_label.setPixmap(pixmap)
 
     def eventFilter(self, obj, event):
         if obj is self.thumb_label and event.type() == event.ToolTip:
-            return False  # 让 QToolTip 正常工作
+            return False
         return super().eventFilter(obj, event)
 
     def apply_scale(self, scale: float):
@@ -151,14 +205,10 @@ class ThumbnailWidget(QFrame):
         self.name_label.setStyleSheet(
             f"color: {TEXT_PRIMARY}; font-size: {sm.scale_int(12)}px; border: none;"
         )
-        # 重新缩放图片
+        # 重新加载图片（CenteredPixmapLabel 会自动按新尺寸缩放居中）
         pixmap = QPixmap(self.file_path)
         if not pixmap.isNull():
-            scaled = pixmap.scaled(
-                thumb_size, thumb_size,
-                Qt.KeepAspectRatio, Qt.SmoothTransformation,
-            )
-            self.thumb_label.setPixmap(scaled)
+            self.thumb_label.setPixmap(pixmap)
 
 
 class UploadComponent(QWidget):
@@ -183,7 +233,8 @@ class UploadComponent(QWidget):
         self._file_paths: list[str] = []
         self._images: list[np.ndarray] = []
         self.setAcceptDrops(True)
-
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)  # 新增
+        self._current_pixmap: QPixmap = None
         self._build_ui()
 
     def _build_ui(self):
@@ -204,7 +255,7 @@ class UploadComponent(QWidget):
         self.empty_icon = QLabel("🖼️")
         self.empty_icon.setAlignment(Qt.AlignCenter)
         self.empty_icon.setStyleSheet("font-size: 48px; border: none;")
-        self.empty_icon.setProperty("_base_font_size", 36)  # emoji 用较小基准
+        self.empty_icon.setProperty("_base_font_size", 36)
         drop_layout.addWidget(self.empty_icon)
 
         self.empty_hint = QLabel("拖拽图片到此处或点击下方按钮上传\n支持 JPG / PNG / BMP，单文件 ≤ 20MB")
@@ -222,14 +273,18 @@ class UploadComponent(QWidget):
         layout.addWidget(self.drop_zone)
 
         # 单图大预览
-        self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setMinimumSize(sm.scale_int(280), sm.scale_int(280))
-        self.preview_label.setMaximumWidth(sm.scale_int(THUMB_MAX_WIDTH))
+        self.preview_label = CenteredPixmapLabel()
+        self.preview_label.setMinimumSize(sm.scale_int(200), sm.scale_int(200))
+        self.preview_label.setMaximumSize(
+            16777215,  # 宽度无限制
+            16777215   # 高度无限制
+        )
+        self.preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.preview_label.setStyleSheet(f"border-radius: 6px; background: {BG_COLOR};")
         self.preview_label.hide()
+        
         if self._mode == "single":
-            layout.addWidget(self.preview_label)
+            layout.addWidget(self.preview_label, 1)  # stretch factor 1，占满剩余空间
 
         # 批量缩略图网格（滚动区域）
         self.scroll_area = QScrollArea()
@@ -246,8 +301,11 @@ class UploadComponent(QWidget):
         self.grid_layout = QGridLayout(self.grid_container)
         self.grid_layout.setSpacing(12)
         self.grid_layout.setContentsMargins(12, 12, 12, 12)
-        self.grid_layout.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        # 设置列拉伸，让每列等宽
+        for col in range(GRID_COLUMNS):
+            self.grid_layout.setColumnStretch(col, 1)
         self.scroll_area.setWidget(self.grid_container)
+        self.scroll_area.setMinimumHeight(sm.scale_int(300))  # 新增
         if self._mode == "batch":
             layout.addWidget(self.scroll_area, 1)
 
@@ -279,6 +337,11 @@ class UploadComponent(QWidget):
         if self._mode == "batch":
             layout.addWidget(self.count_label)
 
+    # ========== 窗口缩放 ==========
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        # CenteredPixmapLabel 内部已处理 resizeEvent，无需手动重缩放
+
     # ========== 拖拽 ==========
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
@@ -301,10 +364,10 @@ class UploadComponent(QWidget):
             event.ignore()
 
     def dragLeaveEvent(self, event):
-        self.drop_zone.setStyleSheet("")  # 恢复 QSS 中的默认样式
+        self.drop_zone.setStyleSheet("")
 
     def dropEvent(self, event: QDropEvent):
-        self.drop_zone.setStyleSheet("")  # 恢复默认
+        self.drop_zone.setStyleSheet("")
         urls = event.mimeData().urls()
         paths = []
         for url in urls:
@@ -342,22 +405,18 @@ class UploadComponent(QWidget):
         oversize_files = []
 
         for p in paths:
-            # 文件类型
             if not self._is_valid_file(p):
                 continue
 
-            # 文件大小
             file_size = os.path.getsize(p)
             size_mb = file_size / (1024 * 1024)
             if size_mb > MAX_FILE_SIZE_MB:
                 oversize_files.append(os.path.basename(p))
                 continue
 
-            # 去重
             if p not in self._file_paths:
                 valid_paths.append(p)
 
-        # 超限提示
         if oversize_files:
             QMessageBox.warning(
                 self, "文件过大",
@@ -365,7 +424,6 @@ class UploadComponent(QWidget):
                 + "\n".join(oversize_files[:10]),
             )
 
-        # 批量数量限制
         if self._mode == "batch":
             remaining = MAX_BATCH_COUNT - len(self._file_paths)
             if remaining <= 0:
@@ -377,7 +435,6 @@ class UploadComponent(QWidget):
             return
 
         if self._mode == "single":
-            # 单图模式：替换
             self._file_paths = valid_paths[:1]
         else:
             self._file_paths.extend(valid_paths)
@@ -394,12 +451,10 @@ class UploadComponent(QWidget):
             if img.isNull():
                 self._images.append(None)
                 continue
-            # 转为 RGB ndarray
             img = img.convertToFormat(QImage.Format_RGB888)
             ptr = img.bits()
             ptr.setsize(img.height() * img.bytesPerLine())
-            arr = np.array(ptr).reshape(img.height(), img.bytesPerLine(), 3)
-            # 去除 stride 对齐多余列
+            arr = np.frombuffer(ptr, dtype=np.uint8).reshape(img.height(), img.bytesPerLine())
             arr = arr[:, :img.width() * 3].reshape(img.height(), img.width(), 3)
             self._images.append(arr.copy())
 
@@ -407,7 +462,6 @@ class UploadComponent(QWidget):
         """根据当前文件列表刷新视图"""
         has_files = len(self._file_paths) > 0
 
-        # 空状态
         self.drop_zone.setVisible(not has_files)
         self.btn_clear.setEnabled(has_files)
 
@@ -421,11 +475,7 @@ class UploadComponent(QWidget):
             path = self._file_paths[0]
             pixmap = QPixmap(path)
             if not pixmap.isNull():
-                scaled = pixmap.scaled(
-                    self.preview_label.size(),
-                    Qt.KeepAspectRatio, Qt.SmoothTransformation,
-                )
-                self.preview_label.setPixmap(scaled)
+                self.preview_label.setPixmap(pixmap)
 
                 file_size = os.path.getsize(path)
                 size_mb = file_size / (1024 * 1024)
@@ -435,13 +485,12 @@ class UploadComponent(QWidget):
                     f"大小: {size_mb:.2f} MB\n"
                     f"格式: {ext}"
                 )
-            self.preview_label.show()
+            self.preview_label.show()  # 修改：直接显示 label
         else:
-            self.preview_label.hide()
             self.preview_label.clear()
+            self.preview_label.hide()  # 修改：直接隐藏 label
 
     def _refresh_batch(self, has_files: bool):
-        # 清除旧缩略图
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             if item.widget():
@@ -453,7 +502,16 @@ class UploadComponent(QWidget):
                 thumb = ThumbnailWidget(path)
                 thumb.delete_requested.connect(self._on_delete_thumb)
                 row, col = divmod(i, GRID_COLUMNS)
-                self.grid_layout.addWidget(thumb, row, col)
+                self.grid_layout.addWidget(thumb, row, col, Qt.AlignCenter)  # 居中对齐
+
+            # 填充剩余空位，最后一行缩略图居中
+            remainder = len(self._file_paths) % GRID_COLUMNS
+            if remainder != 0:
+                row = len(self._file_paths) // GRID_COLUMNS
+                for col in range(remainder, GRID_COLUMNS):
+                    spacer = QWidget()
+                    spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+                    self.grid_layout.addWidget(spacer, row, col)
 
             self.count_label.setText(f"已选择 {len(self._file_paths)} 张图片")
         else:
@@ -461,7 +519,6 @@ class UploadComponent(QWidget):
             self.count_label.setText("")
 
     def _on_delete_thumb(self, file_path: str):
-        """缩略图删除按钮回调"""
         if file_path in self._file_paths:
             idx = self._file_paths.index(file_path)
             self._file_paths.remove(file_path)
@@ -475,7 +532,6 @@ class UploadComponent(QWidget):
         valid_images = [img for img in self._images if img is not None]
         self.images_ready.emit(valid_images)
 
-    # ========== 公共 API ==========
     def clear_all(self):
         """清空所有已上传文件"""
         self._file_paths.clear()
@@ -496,7 +552,6 @@ class UploadComponent(QWidget):
         return len(self._file_paths)
 
     def _update_btn_clear_style(self):
-        """根据当前缩放更新清空按钮样式"""
         sm = ScaleManager.get()
         r = sm.scale_int(6)
         p = f"{sm.scale_int(10)}px {sm.scale_int(24)}px"
@@ -520,33 +575,31 @@ class UploadComponent(QWidget):
         """)
 
     def apply_scale(self, scale: float):
-        """缩放组件尺寸"""
         sm = ScaleManager.get()
         self.drop_zone.setMinimumHeight(sm.scale_int(160))
         if self._mode == "single":
-            self.preview_label.setMinimumSize(sm.scale_int(280), sm.scale_int(280))
-            self.preview_label.setMaximumWidth(sm.scale_int(THUMB_MAX_WIDTH))
+            self.preview_label.setMinimumSize(sm.scale_int(200), sm.scale_int(200))
+            self.preview_label.setMaximumSize(
+                16777215,  # 宽度无限制
+                16777215   # 高度无限制
+            )
+            # CenteredPixmapLabel 内部已处理 resize，无需手动重缩放
 
-        # 更新清空按钮样式
         self._update_btn_clear_style()
 
-        # 更新缩略图网格间距与边距
         sp = sm.scale_int(12)
         self.grid_layout.setSpacing(sp)
         self.grid_layout.setContentsMargins(sp, sp, sp, sp)
 
-        # 更新空状态图标与提示文字
         self.empty_icon.setStyleSheet(f"font-size: {sm.scale_int(48)}px; border: none;")
         self.empty_hint.setStyleSheet(
             f"color: {TEXT_SECONDARY}; font-size: {sm.scale_int(14)}px; border: none;"
         )
 
-        # 更新计数标签
         self.count_label.setStyleSheet(
             f"color: {TEXT_SECONDARY}; font-size: {sm.scale_int(12)}px; border: none;"
         )
 
-        # 更新滚动区圆角
         self.scroll_area.setStyleSheet(f"""
             QScrollArea {{
                 border: 1px solid {BORDER_COLOR};
@@ -555,7 +608,6 @@ class UploadComponent(QWidget):
             }}
         """)
 
-        # 重新缩放已有缩略图
         thumb_size = sm.scale_int(THUMB_GRID_SIZE)
         for i in range(self.grid_layout.count()):
             item = self.grid_layout.itemAt(i)

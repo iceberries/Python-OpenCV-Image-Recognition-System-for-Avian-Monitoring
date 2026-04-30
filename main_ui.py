@@ -33,6 +33,8 @@ def main():
     font = QFont("Microsoft YaHei", 10)
     app.setFont(font)
 
+
+
     # 注册页面
     pages = {
         "首页": HomePage(),
@@ -63,7 +65,6 @@ def main():
     QTimer.singleShot(500, _auto_load_model)
 
     sys.exit(app.exec_())
-
 
 if __name__ == "__main__":
     main()

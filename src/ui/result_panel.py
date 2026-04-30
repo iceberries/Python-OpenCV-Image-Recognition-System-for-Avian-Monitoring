@@ -38,6 +38,30 @@ from src.ui.styles import (
 )
 from src.ui.scale_manager import ScaleManager
 
+# 基准尺寸常量
+BASE_RING_SIZE = 100
+BASE_RING_PEN = 10
+BASE_RING_FONT = 18
+BASE_RANK_FONT = 12
+BASE_NAME_FONT = 13
+BASE_VAL_FONT = 12
+BASE_BAR_H = 12
+BASE_RANK_W = 24
+BASE_NAME_W = 110
+BASE_VAL_W = 56
+BASE_LATENCY_TITLE_FONT = 13
+BASE_LATENCY_LABEL_FONT = 12
+BASE_PRED_HINT_FONT = 14
+BASE_PRED_NAME_FONT = 22
+BASE_TOPK_TITLE_FONT = 13
+BASE_EMPTY_FONT = 16
+BASE_CARD_W = 170
+BASE_CARD_H = 200
+BASE_THUMB_W = 150
+BASE_THUMB_H = 120
+BASE_CARD_NAME_FONT = 13
+BASE_CARD_BADGE_FONT = 12
+
 
 # ============================================================
 # 数据模型
@@ -61,11 +85,13 @@ class RecognitionResult:
 class RingProgressWidget(QWidget):
     """环形置信度进度条，颜色按阈值自动变化"""
 
-    def __init__(self, value: float = 0.0, size: int = 120, parent=None):
+    def __init__(self, value: float = 0.0, size: int = BASE_RING_SIZE, parent=None):
         super().__init__(parent)
         self._value = value  # 0.0 ~ 1.0
-        self._size = size
-        self.setFixedSize(size, size)
+        self._base_size = size
+        sm = ScaleManager.get()
+        actual = sm.scale_int(size)
+        self.setFixedSize(actual, actual)
 
     def set_value(self, value: float):
         self._value = max(0.0, min(1.0, value))
@@ -80,12 +106,17 @@ class RingProgressWidget(QWidget):
             return QColor(DANGER_COLOR)
 
     def paintEvent(self, event):
+        sm = ScaleManager.get()
+        pen_width = sm.scale_int(BASE_RING_PEN)
+        font_px = sm.scale_int(BASE_RING_FONT)
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
 
-        pen_width = 10
         margin = pen_width // 2 + 2
-        rect = QRectF(margin, margin, self._size - 2 * margin, self._size - 2 * margin)
+        w = self.width()
+        h = self.height()
+        rect = QRectF(margin, margin, w - 2 * margin, h - 2 * margin)
 
         # 背景环
         bg_pen = QPen(QColor(BORDER_COLOR), pen_width, Qt.SolidLine, Qt.RoundCap)
@@ -100,13 +131,20 @@ class RingProgressWidget(QWidget):
         start_angle = 90 * 16  # 从顶部开始
         painter.drawArc(rect, start_angle, -span)
 
-        # 中心文字
+        # 中心文字 - 保留一位小数
         painter.setPen(QColor(TEXT_PRIMARY))
-        font = QFont("Microsoft YaHei", 18, QFont.Bold)
+        font = QFont("Microsoft YaHei", font_px, QFont.Bold)
+        font.setPixelSize(font_px)
         painter.setFont(font)
-        painter.drawText(rect, Qt.AlignCenter, f"{self._value:.0%}")
+        painter.drawText(rect, Qt.AlignCenter, f"{self._value:.1%}")
 
         painter.end()
+
+    def apply_scale(self, scale: float):
+        sm = ScaleManager.get()
+        actual = sm.scale_int(self._base_size)
+        self.setFixedSize(actual, actual)
+        self.update()
 
 
 # ============================================================
@@ -122,10 +160,12 @@ class TopKBarChart(QWidget):
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(6)
+        self._layout.setSpacing(ScaleManager.get().scale_int(6))
 
     def set_data(self, top_k: List[Dict]):
         """top_k: [{"class_name": str, "confidence": float}, ...]"""
+        sm = ScaleManager.get()
+
         # 清除旧条目
         while self._layout.count():
             child = self._layout.takeAt(0)
@@ -140,19 +180,19 @@ class TopKBarChart(QWidget):
             bar_color = PRIMARY_COLOR if i == 0 else "#adb5bd"
 
             row = QHBoxLayout()
-            row.setSpacing(8)
+            row.setSpacing(sm.scale_int(8))
 
             # 排名
             rank_label = QLabel(f"#{i + 1}")
-            rank_label.setFixedWidth(24)
-            rank_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; border: none;")
+            rank_label.setFixedWidth(sm.scale_int(BASE_RANK_W))
+            rank_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {sm.scale_int(BASE_RANK_FONT)}px; border: none;")
             rank_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             row.addWidget(rank_label)
 
             # 类别名
             name_label = QLabel(str(name))
-            name_label.setFixedWidth(110)
-            name_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 13px; border: none;")
+            name_label.setFixedWidth(sm.scale_int(BASE_NAME_W))
+            name_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {sm.scale_int(BASE_NAME_FONT)}px; border: none;")
             name_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             row.addWidget(name_label)
 
@@ -160,29 +200,33 @@ class TopKBarChart(QWidget):
             bar = QProgressBar()
             bar.setRange(0, 100)
             bar.setValue(int(conf * 100))
-            bar.setFixedHeight(12)
+            bar.setFixedHeight(sm.scale_int(BASE_BAR_H))
             bar.setFormat("")
             bar.setStyleSheet(f"""
                 QProgressBar {{
                     border: none;
-                    border-radius: 6px;
+                    border-radius: {sm.scale_int(6)}px;
                     background: {BORDER_COLOR};
                 }}
                 QProgressBar::chunk {{
                     background: {bar_color};
-                    border-radius: 6px;
+                    border-radius: {sm.scale_int(6)}px;
                 }}
             """)
             row.addWidget(bar, 1)
 
-            # 百分比
-            val_label = QLabel(f"{conf:.2%}")
-            val_label.setFixedWidth(56)
-            val_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; border: none;")
+            # 百分比 - 保留一位小数
+            val_label = QLabel(f"{conf:.1%}")
+            val_label.setFixedWidth(sm.scale_int(BASE_VAL_W))
+            val_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {sm.scale_int(BASE_VAL_FONT)}px; border: none;")
             val_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             row.addWidget(val_label)
 
             self._layout.addLayout(row)
+
+    def apply_scale(self, scale: float):
+        sm = ScaleManager.get()
+        self._layout.setSpacing(sm.scale_int(6))
 
 
 # ============================================================
@@ -193,34 +237,43 @@ class LatencyDisplay(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        sm = ScaleManager.get()
         self.setObjectName("Card")
+
+        title_px = sm.scale_int(BASE_LATENCY_TITLE_FONT)
+        label_px = sm.scale_int(BASE_LATENCY_LABEL_FONT)
+
         self.setStyleSheet(f"""
             #Card {{
                 background-color: {CARD_BG};
                 border: 1px solid {BORDER_COLOR};
                 border-radius: 6px;
-                padding: 8px 12px;
+                padding: {sm.scale_int(8)}px {sm.scale_int(12)}px;
             }}
         """)
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(4)
-        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(sm.scale_int(6))
+        layout.setContentsMargins(sm.scale_int(10), sm.scale_int(8), sm.scale_int(10), sm.scale_int(8))
 
         title = QLabel("⏱️ 推理耗时")
-        title.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 13px; font-weight: bold; border: none;")
+        title.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {title_px}px; font-weight: bold; border: none;")
         layout.addWidget(title)
 
         self._rows = {}
+        self._stage_labels = []
+        self._ms_labels = []
         for stage, label in [("preprocess", "预处理"), ("inference", "模型推理"), ("postprocess", "后处理")]:
             row = QHBoxLayout()
             stage_label = QLabel(label)
-            stage_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; border: none;")
+            stage_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {label_px}px; border: none;")
+            self._stage_labels.append(stage_label)
             row.addWidget(stage_label)
             row.addStretch()
             ms_label = QLabel("-")
-            ms_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 12px; border: none;")
+            ms_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {label_px}px; border: none;")
             ms_label.setAlignment(Qt.AlignRight)
+            self._ms_labels.append(ms_label)
             row.addWidget(ms_label)
             layout.addLayout(row)
             self._rows[stage] = ms_label
@@ -232,12 +285,12 @@ class LatencyDisplay(QFrame):
         layout.addWidget(sep)
 
         total_row = QHBoxLayout()
-        total_label = QLabel("总计")
-        total_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 12px; font-weight: bold; border: none;")
-        total_row.addWidget(total_label)
+        self._total_label_text = QLabel("总计")
+        self._total_label_text.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {label_px}px; font-weight: bold; border: none;")
+        total_row.addWidget(self._total_label_text)
         total_row.addStretch()
         self._total_label = QLabel("-")
-        self._total_label.setStyleSheet(f"color: {PRIMARY_COLOR}; font-size: 13px; font-weight: bold; border: none;")
+        self._total_label.setStyleSheet(f"color: {PRIMARY_COLOR}; font-size: {title_px}px; font-weight: bold; border: none;")
         self._total_label.setAlignment(Qt.AlignRight)
         total_row.addWidget(self._total_label)
         layout.addLayout(total_row)
@@ -252,9 +305,20 @@ class LatencyDisplay(QFrame):
         total = 0.0
         for stage, ms_label in self._rows.items():
             val = latency.get(stage, 0.0)
-            ms_label.setText(f"{val:.2f} ms")
+            ms_label.setText(f"{val:.1f} ms")
             total += val
-        self._total_label.setText(f"{total:.2f} ms")
+        self._total_label.setText(f"{total:.1f} ms")
+
+    def apply_scale(self, scale: float):
+        sm = ScaleManager.get()
+        title_px = sm.scale_int(BASE_LATENCY_TITLE_FONT)
+        label_px = sm.scale_int(BASE_LATENCY_LABEL_FONT)
+        for lbl in self._stage_labels:
+            lbl.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {label_px}px; border: none;")
+        for lbl in self._ms_labels:
+            lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {label_px}px; border: none;")
+        self._total_label_text.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {label_px}px; font-weight: bold; border: none;")
+        self._total_label.setStyleSheet(f"color: {PRIMARY_COLOR}; font-size: {title_px}px; font-weight: bold; border: none;")
 
 
 # ============================================================
@@ -316,7 +380,7 @@ class SingleResultPanel(QWidget):
         sm = ScaleManager.get()
 
         main_layout = QHBoxLayout(self)
-        main_layout.setSpacing(16)
+        main_layout.setSpacing(sm.scale_int(16))
         main_layout.setContentsMargins(0, 0, 0, 0)
 
         # ===== 左栏: 图片区域 =====
@@ -325,7 +389,7 @@ class SingleResultPanel(QWidget):
         self._left_card = left_card
         left_card.setMinimumHeight(sm.scale_int(400))
         left_layout = QVBoxLayout(left_card)
-        left_layout.setSpacing(8)
+        left_layout.setSpacing(sm.scale_int(8))
 
         # 图片标题行
         img_title_row = QHBoxLayout()
@@ -375,9 +439,10 @@ class SingleResultPanel(QWidget):
         # ===== 右栏: 结果详情 =====
         right_card = QFrame()
         right_card.setObjectName("Card")
-        right_card.setMinimumHeight(400)
+        self._right_card = right_card
+        right_card.setMinimumHeight(sm.scale_int(400))
         right_layout = QVBoxLayout(right_card)
-        right_layout.setSpacing(12)
+        right_layout.setSpacing(sm.scale_int(10))
 
         result_title = QLabel("📋 结果详情")
         result_title.setObjectName("SectionTitle")
@@ -387,17 +452,21 @@ class SingleResultPanel(QWidget):
         # 主预测: 类别名 + 环形进度条
         pred_row = QHBoxLayout()
         pred_text_layout = QVBoxLayout()
+        pred_text_layout.setSpacing(sm.scale_int(2))
+
+        hint_px = sm.scale_int(BASE_PRED_HINT_FONT)
+        name_px = sm.scale_int(BASE_PRED_NAME_FONT)
         self.class_label = QLabel("等待识别...")
-        self.class_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 14px; border: none;")
+        self.class_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {hint_px}px; border: none;")
         pred_text_layout.addWidget(self.class_label)
 
         self.class_name_label = QLabel("")
-        self.class_name_label.setFont(QFont("Microsoft YaHei", 22, QFont.Bold))
-        self.class_name_label.setStyleSheet(f"color: {TEXT_PRIMARY}; border: none;")
+        self.class_name_label.setFont(QFont("Microsoft YaHei", name_px, QFont.Bold))
+        self.class_name_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {name_px}px; border: none;")
         pred_text_layout.addWidget(self.class_name_label)
         pred_row.addLayout(pred_text_layout, 1)
 
-        self.ring_progress = RingProgressWidget(size=100)
+        self.ring_progress = RingProgressWidget(size=BASE_RING_SIZE)
         pred_row.addWidget(self.ring_progress)
         right_layout.addLayout(pred_row)
 
@@ -408,9 +477,11 @@ class SingleResultPanel(QWidget):
         right_layout.addWidget(sep)
 
         # Top-K 条形图
+        topk_px = sm.scale_int(BASE_TOPK_TITLE_FONT)
         top_k_title = QLabel("Top-5 排行")
-        top_k_title.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 13px; font-weight: bold; border: none;")
+        top_k_title.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {topk_px}px; font-weight: bold; border: none;")
         right_layout.addWidget(top_k_title)
+        self._topk_title = top_k_title
 
         self.top_k_chart = TopKBarChart(max_bars=5)
         right_layout.addWidget(self.top_k_chart)
@@ -423,22 +494,21 @@ class SingleResultPanel(QWidget):
         main_layout.addWidget(right_card, 1)
 
         # 空状态
+        empty_px = sm.scale_int(BASE_EMPTY_FONT)
         self._empty_hint = QLabel("🔎 上传图片并点击识别查看结果")
         self._empty_hint.setAlignment(Qt.AlignCenter)
-        self._empty_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 16px; border: none;")
+        self._empty_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {empty_px}px; border: none;")
         main_layout.addWidget(self._empty_hint)
 
         # 初始隐藏内容
         left_card.hide()
         right_card.hide()
 
-        self._left_card = left_card
-        self._right_card = right_card
-
     def set_result(self, result: RecognitionResult):
         """设置识别结果并更新 UI"""
         self._result = result
         self._showing_overlay = False
+        sm = ScaleManager.get()
 
         # 显示内容，隐藏空状态
         self._left_card.show()
@@ -457,8 +527,10 @@ class SingleResultPanel(QWidget):
 
         # 右栏数据
         conf_color = SUCCESS_COLOR if result.confidence > 0.9 else (WARNING_COLOR if result.confidence > 0.7 else DANGER_COLOR)
-        self.class_label.setText(f"预测类别（置信度 {result.confidence:.2%}）")
-        self.class_label.setStyleSheet(f"color: {conf_color}; font-size: 14px; border: none;")
+        hint_px = sm.scale_int(BASE_PRED_HINT_FONT)
+        # 置信度保留一位小数
+        self.class_label.setText(f"预测类别（置信度 {result.confidence:.1%}）")
+        self.class_label.setStyleSheet(f"color: {conf_color}; font-size: {hint_px}px; border: none;")
         self.class_name_label.setText(result.class_name)
         self.ring_progress.set_value(result.confidence)
 
@@ -534,11 +606,6 @@ class SingleResultPanel(QWidget):
         dialog = ImagePreviewDialog(pixmap, "图片预览", self.window())
         dialog.exec_()
 
-    def apply_scale(self, scale: float):
-        """缩放面板尺寸"""
-        # BatchResultPanel 使用弹性布局，QSS 处理大部分缩放
-        pass
-
     def _save_image(self):
         if self._result is None:
             return
@@ -558,12 +625,35 @@ class SingleResultPanel(QWidget):
                 QMessageBox.warning(self, "保存失败", str(e))
 
     def apply_scale(self, scale: float):
-        """缩放面板尺寸"""
+        """缩放面板尺寸与字体"""
         sm = ScaleManager.get()
         self._left_card.setMinimumHeight(sm.scale_int(400))
+        self._right_card.setMinimumHeight(sm.scale_int(400))
         self.image_label.setMinimumSize(sm.scale_int(280), sm.scale_int(280))
         self.image_label.setMaximumSize(sm.scale_int(500), sm.scale_int(500))
-        self.ring_progress.setFixedSize(sm.scale_int(100), sm.scale_int(100))
+        self.ring_progress.apply_scale(scale)
+        self.top_k_chart.apply_scale(scale)
+        self.latency_display.apply_scale(scale)
+
+        # 更新右栏字体
+        hint_px = sm.scale_int(BASE_PRED_HINT_FONT)
+        name_px = sm.scale_int(BASE_PRED_NAME_FONT)
+        topk_px = sm.scale_int(BASE_TOPK_TITLE_FONT)
+        empty_px = sm.scale_int(BASE_EMPTY_FONT)
+
+        # 重新设置 class_label 样式（保留颜色）
+        if self._result:
+            conf = self._result.confidence
+            conf_color = SUCCESS_COLOR if conf > 0.9 else (WARNING_COLOR if conf > 0.7 else DANGER_COLOR)
+        else:
+            conf_color = TEXT_SECONDARY
+        self.class_label.setStyleSheet(f"color: {conf_color}; font-size: {hint_px}px; border: none;")
+        self.class_name_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {name_px}px; border: none;")
+        font = self.class_name_label.font()
+        font.setPixelSize(name_px)
+        self.class_name_label.setFont(font)
+        self._topk_title.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {topk_px}px; font-weight: bold; border: none;")
+        self._empty_hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {empty_px}px; border: none;")
 
 
 # ============================================================
@@ -708,9 +798,9 @@ class BatchResultTable(QWidget):
             # 类别
             self.table.setItem(row_idx, 1, QTableWidgetItem(r.class_name))
 
-            # 置信度
+            # 置信度 - 保留一位小数
             conf = r.confidence
-            conf_item = QTableWidgetItem(f"{conf:.2%}")
+            conf_item = QTableWidgetItem(f"{conf:.1%}")
             conf_item.setTextAlignment(Qt.AlignCenter)
             # 颜色
             if conf > 0.9:
@@ -813,9 +903,10 @@ class ResultCardWidget(QFrame):
 
     def __init__(self, result: RecognitionResult, index: int, parent=None):
         super().__init__(parent)
+        sm = ScaleManager.get()
         self._index = index
         self.setObjectName("ResultCard")
-        self.setFixedSize(170, 200)
+        self.setFixedSize(sm.scale_int(BASE_CARD_W), sm.scale_int(BASE_CARD_H))
         self.setCursor(Qt.PointingHandCursor)
         self.setStyleSheet(f"""
             #ResultCard {{
@@ -829,13 +920,13 @@ class ResultCardWidget(QFrame):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 6)
-        layout.setSpacing(4)
+        layout.setContentsMargins(sm.scale_int(8), sm.scale_int(8), sm.scale_int(8), sm.scale_int(6))
+        layout.setSpacing(sm.scale_int(4))
 
         # 缩略图
         self.thumb = QLabel()
         self.thumb.setAlignment(Qt.AlignCenter)
-        self.thumb.setFixedSize(150, 120)
+        self.thumb.setFixedSize(sm.scale_int(BASE_THUMB_W), sm.scale_int(BASE_THUMB_H))
         self.thumb.setStyleSheet(f"border-radius: 4px; background: {BG_COLOR};")
         if result.image is not None:
             self._set_thumbnail(result.image)
@@ -845,12 +936,13 @@ class ResultCardWidget(QFrame):
         name = result.class_name
         if len(name) > 14:
             name = name[:12] + "..."
+        name_px = sm.scale_int(BASE_CARD_NAME_FONT)
         class_label = QLabel(name)
         class_label.setAlignment(Qt.AlignCenter)
-        class_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 13px; font-weight: bold; border: none;")
+        class_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {name_px}px; font-weight: bold; border: none;")
         layout.addWidget(class_label)
 
-        # 置信度徽章
+        # 置信度徽章 - 保留一位小数
         conf = result.confidence
         if conf > 0.9:
             badge_color = SUCCESS_COLOR
@@ -859,14 +951,15 @@ class ResultCardWidget(QFrame):
         else:
             badge_color = DANGER_COLOR
 
-        badge = QLabel(f"{conf:.2%}")
+        badge_px = sm.scale_int(BASE_CARD_BADGE_FONT)
+        badge = QLabel(f"{conf:.1%}")
         badge.setAlignment(Qt.AlignCenter)
         badge.setStyleSheet(f"""
             background-color: {badge_color};
             color: white;
             border-radius: 10px;
             padding: 2px 10px;
-            font-size: 12px;
+            font-size: {badge_px}px;
             font-weight: bold;
         """)
         layout.addWidget(badge)
@@ -878,7 +971,11 @@ class ResultCardWidget(QFrame):
         rgb = img[:, :, ::-1].copy()
         qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(qimg)
-        scaled = pixmap.scaled(150, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        sm = ScaleManager.get()
+        scaled = pixmap.scaled(
+            sm.scale_int(BASE_THUMB_W), sm.scale_int(BASE_THUMB_H),
+            Qt.KeepAspectRatio, Qt.SmoothTransformation,
+        )
         self.thumb.setPixmap(scaled)
 
 
@@ -1058,10 +1155,4 @@ class BatchResultPanel(QWidget):
 
     def apply_scale(self, scale: float):
         """缩放面板尺寸"""
-        # BatchResultPanel 使用弹性布局，QSS 处理大部分缩放
-        pass
-
-    def apply_scale(self, scale: float):
-        """缩放面板尺寸"""
-        # BatchResultPanel 使用弹性布局，QSS 处理大部分缩放
         pass

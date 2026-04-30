@@ -63,9 +63,7 @@ class BatchRecognitionPage(QWidget):
 
         # 上传组件（批量模式）
         self.upload_component = UploadComponent(mode="batch")
-        self.upload_component.files_changed.connect(self._on_files_changed)
-        self.upload_component.images_ready.connect(self._on_images_ready)
-        main_card_layout.addWidget(self.upload_component)
+        main_card_layout.addWidget(self.upload_component, 1)  # 加 stretch，保证高度
 
         # 操作行
         action_row = QHBoxLayout()
