@@ -21,7 +21,6 @@ from src.ui.pages.settings_page import SettingsPage
 from src.ui.event_bus import EventBus
 from src.core.model_manager import ModelManager
 
-
 def main():
     # 高 DPI 支持
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)

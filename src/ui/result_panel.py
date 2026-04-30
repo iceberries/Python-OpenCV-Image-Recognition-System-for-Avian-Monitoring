@@ -16,6 +16,9 @@ import json
 import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+from src.ui.MarqueeLabel import MarqueeLabel
+from src.ui.progressbar import RoundedProgressBar
+from src.ui.centered_label import CenteredPixmapLabel
 
 import numpy as np
 from PyQt5.QtWidgets import (
@@ -28,7 +31,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QSize, QRectF, QTimer
 from PyQt5.QtGui import (
     QPainter, QPen, QColor, QFont, QConicalGradient, QPalette,
-    QPixmap, QImage, QBrush,
+    QPixmap, QImage, QBrush,QPainterPath,
 )
 
 from src.ui.styles import (
@@ -163,14 +166,22 @@ class TopKBarChart(QWidget):
         self._layout.setSpacing(ScaleManager.get().scale_int(6))
 
     def set_data(self, top_k: List[Dict]):
-        """top_k: [{"class_name": str, "confidence": float}, ...]"""
         sm = ScaleManager.get()
 
         # 清除旧条目
         while self._layout.count():
             child = self._layout.takeAt(0)
+            if child is None:
+                continue
+            if child.layout():
+                while child.layout().count():
+                    sub = child.layout().takeAt(0)
+                    if sub and sub.widget():
+                        sub.widget().deleteLater()
+                child.layout().deleteLater()
             if child.widget():
                 child.widget().deleteLater()
+            child.deleteLater()
 
         self._items = top_k[:self._max_bars]
 
@@ -189,33 +200,27 @@ class TopKBarChart(QWidget):
             rank_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             row.addWidget(rank_label)
 
-            # 类别名
-            name_label = QLabel(str(name))
+            # 类别名 —— 修复：添加 row.addWidget
+            name_label = MarqueeLabel(str(name))
             name_label.setFixedWidth(sm.scale_int(BASE_NAME_W))
             name_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: {sm.scale_int(BASE_NAME_FONT)}px; border: none;")
-            name_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            row.addWidget(name_label)
+            name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            name_label.setSpeed(1)
+            name_label.setInterval(30)
+            row.addWidget(name_label)  # ✅ 修复：添加这行
 
             # 进度条
-            bar = QProgressBar()
+            bar = RoundedProgressBar(
+                bar_color=bar_color,
+                bg_color=BORDER_COLOR,
+                radius=sm.scale_int(6)
+            )
             bar.setRange(0, 100)
             bar.setValue(int(conf * 100))
             bar.setFixedHeight(sm.scale_int(BASE_BAR_H))
-            bar.setFormat("")
-            bar.setStyleSheet(f"""
-                QProgressBar {{
-                    border: none;
-                    border-radius: {sm.scale_int(6)}px;
-                    background: {BORDER_COLOR};
-                }}
-                QProgressBar::chunk {{
-                    background: {bar_color};
-                    border-radius: {sm.scale_int(6)}px;
-                }}
-            """)
             row.addWidget(bar, 1)
 
-            # 百分比 - 保留一位小数
+            # 百分比
             val_label = QLabel(f"{conf:.1%}")
             val_label.setFixedWidth(sm.scale_int(BASE_VAL_W))
             val_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: {sm.scale_int(BASE_VAL_FONT)}px; border: none;")
@@ -419,8 +424,7 @@ class SingleResultPanel(QWidget):
         left_layout.addLayout(img_title_row)
 
         # 图片显示
-        self.image_label = QLabel()
-        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label = CenteredPixmapLabel()
         self.image_label.setMinimumSize(sm.scale_int(280), sm.scale_int(280))
         self.image_label.setMaximumSize(sm.scale_int(500), sm.scale_int(500))
         self.image_label.setStyleSheet(f"border-radius: 6px; background: {BG_COLOR};")
@@ -572,11 +576,8 @@ class SingleResultPanel(QWidget):
             self.image_label.setText("无法显示图片")
             return
         pixmap = self._ndarray_to_pixmap(img)
-        scaled = pixmap.scaled(
-            self.image_label.size(),
-            Qt.KeepAspectRatio, Qt.SmoothTransformation,
-        )
-        self.image_label.setPixmap(scaled)
+        # CenteredPixmapLabel 内部处理缩放居中
+        self.image_label.setPixmap(pixmap)
 
     def _toggle_overlay(self, checked: bool):
         if self._result is None:
