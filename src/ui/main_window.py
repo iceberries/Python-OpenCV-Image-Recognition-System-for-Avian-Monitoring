@@ -2,13 +2,14 @@
 主窗口 - 侧边栏导航 + 内容区页面切换
 集成 ScaleManager 实现窗口缩放自适应
 """
+import os
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QLabel, QPushButton, QStackedWidget, QStatusBar,
     QFrame, QSizePolicy, QApplication,QShortcut
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QSize,QEvent
-from PyQt5.QtGui import QFont,QKeySequence
+from PyQt5.QtGui import QFont,QKeySequence, QIcon
 
 from src.ui.styles import build_scaled_qss, NAV_ICONS, PRIMARY_COLOR
 from src.ui.event_bus import EventBus
@@ -150,6 +151,12 @@ class MainWindow(QMainWindow):
         self.shortcut_f5.activated.connect(self._refresh_ui)
         QApplication.instance().installEventFilter(self)
         self.setWindowTitle("鸟类图像识别系统")
+        
+        # 设置窗口图标（程序栏显示）
+        from main_ui import PROJECT_ROOT
+        icon_path = os.path.join(PROJECT_ROOT, "识鸟.ico")
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
         self.setMinimumSize(900, 600)
 
         # 初始化 ScaleManager（使用屏幕尺寸作为基准）

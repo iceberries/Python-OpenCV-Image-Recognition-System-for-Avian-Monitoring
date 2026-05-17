@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox, QGroupBox, QFormLayout, QMessageBox,
     QFileDialog, QProgressBar, QScrollArea, QSizePolicy,
 )
-from PyQt5.QtCore import Qt, QSettings
+from PyQt5.QtCore import Qt, QSettings, QTimer
 from PyQt5.QtGui import QFont
 
 from src.ui.styles import TEXT_PRIMARY, TEXT_SECONDARY, PRIMARY_COLOR, BORDER_COLOR, DANGER_COLOR
@@ -131,11 +131,11 @@ class SettingsPage(QWidget):
         self._form_labels.append(self._model_path_label)
         path_row.addWidget(self._model_path_label, 1)
 
-        btn_browse = QPushButton("📁 选择权重")
-        btn_browse.setObjectName("SecondaryButton")
-        btn_browse.setCursor(Qt.PointingHandCursor)
-        btn_browse.clicked.connect(self._browse_model)
-        path_row.addWidget(btn_browse)
+        self._btn_browse = QPushButton("📁 选择权重")
+        self._btn_browse.setObjectName("SecondaryButton")
+        self._btn_browse.setCursor(Qt.PointingHandCursor)
+        self._btn_browse.clicked.connect(self._browse_model)
+        path_row.addWidget(self._btn_browse)
         load_layout.addLayout(path_row)
 
         # 加载/卸载按钮
@@ -158,21 +158,38 @@ class SettingsPage(QWidget):
         # ===== 环境检查 =====
         env_group, env_layout = self._create_group("🔍 环境检查", layout)
 
-        model_path = os.path.join(OUTPUT_DIR, "best_model.pth")
-        dataset_dir = os.path.join(PROJECT_ROOT, "CUB_200_2011", "CUB_200_2011")
+        # 模型文件选择
+        model_row = QHBoxLayout()
+        self._model_file_label = QLabel("模型文件: 未选择")
+        self._set_scaled_font(self._model_file_label, BASE_LABEL_FONT)
+        self._form_labels.append(self._model_file_label)
+        self._model_file_label.setWordWrap(True)
+        model_row.addWidget(self._model_file_label, 1)
 
-        model_status = "✅ 已找到" if os.path.exists(model_path) else "❌ 未找到"
-        dataset_status = "✅ 已找到" if os.path.exists(dataset_dir) else "❌ 未找到"
+        self._btn_select_model = QPushButton("📁 选择模型")
+        self._btn_select_model.setObjectName("SecondaryButton")
+        self._btn_select_model.setCursor(Qt.PointingHandCursor)
+        self._btn_select_model.clicked.connect(self._select_model_file)
+        model_row.addWidget(self._btn_select_model)
+        env_layout.addLayout(model_row)
 
-        for text in [
-            f"模型文件 ({model_path}): {model_status}",
-            f"数据集目录: {dataset_status}",
-        ]:
-            lbl = QLabel(text)
-            self._set_scaled_font(lbl, BASE_LABEL_FONT)
-            self._form_labels.append(lbl)
-            lbl.setWordWrap(True)
-            env_layout.addWidget(lbl)
+        # 数据集目录选择
+        dataset_row = QHBoxLayout()
+        self._dataset_dir_label = QLabel("数据集目录: 未选择")
+        self._set_scaled_font(self._dataset_dir_label, BASE_LABEL_FONT)
+        self._form_labels.append(self._dataset_dir_label)
+        self._dataset_dir_label.setWordWrap(True)
+        dataset_row.addWidget(self._dataset_dir_label, 1)
+
+        self._btn_select_dataset = QPushButton("📁 选择数据集")
+        self._btn_select_dataset.setObjectName("SecondaryButton")
+        self._btn_select_dataset.setCursor(Qt.PointingHandCursor)
+        self._btn_select_dataset.clicked.connect(self._select_dataset_dir)
+        dataset_row.addWidget(self._btn_select_dataset)
+        env_layout.addLayout(dataset_row)
+
+        # 初始化显示（加载保存的设置）
+        self._update_env_status()
 
         # GPU 信息
         gpu_info = get_gpu_memory_info()
@@ -271,11 +288,39 @@ class SettingsPage(QWidget):
         AppState.get().modelStatusChanged.connect(self._on_model_status_changed)
         ModelManager.get().modelLoaded.connect(self._on_model_loaded)
         ModelManager.get().modelLoadingProgress.connect(self._on_loading_progress)
-
+        
         # 初始刷新
         self._refresh_model_info()
+        
+        # 延迟对齐按钮宽度（等待窗口完全显示）
+        QTimer.singleShot(0, self._align_buttons)
 
     # ===== 辅助方法 =====
+
+    def _align_buttons(self):
+        """对齐三个按钮（选择权重、选择模型、选择数据集）的宽度，并添加余量防止文字截断"""
+        # 使用 sizeHint 获取推荐大小
+        browse_hint = self._btn_browse.sizeHint()
+        model_hint = self._btn_select_model.sizeHint()
+        dataset_hint = self._btn_select_dataset.sizeHint()
+        # 取三个按钮中较大的宽度，并增加 1/2 余量防止文字截断
+        max_width = max(browse_hint.width(), model_hint.width(), dataset_hint.width())
+        padding = max_width // 2  # 余量为最大宽度的 1/2
+        final_width = max_width + padding
+        self._btn_browse.setFixedWidth(final_width)
+        self._btn_select_model.setFixedWidth(final_width)
+        self._btn_select_dataset.setFixedWidth(final_width)
+
+    @staticmethod
+    def _align_button_width(btn_target: QPushButton, btn_source: QPushButton):
+        """将目标按钮的宽度对齐到源按钮"""
+        # 使用 sizeHint 获取推荐大小，确保按钮文本完整显示
+        target_hint = btn_target.sizeHint()
+        source_hint = btn_source.sizeHint()
+        # 取两者中较大的宽度
+        max_width = max(target_hint.width(), source_hint.width())
+        btn_target.setFixedWidth(max_width)
+        btn_source.setFixedWidth(max_width)
 
     def _create_group(self, title: str, parent_layout: QVBoxLayout) -> tuple:
         """创建 QGroupBox 并返回 (group, inner_layout)"""
@@ -415,6 +460,49 @@ class SettingsPage(QWidget):
             self._device_label.setText("-")
             self._acc_label.setText("-")
             self._class_count_label.setText("-")
+
+    # ===== 环境检查选择方法 =====
+
+    def _select_model_file(self):
+        """选择模型文件 (.pth)"""
+        current_path = self._settings.value("check_model_path", OUTPUT_DIR)
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择模型权重文件", current_path,
+            "PyTorch 模型 (*.pth *.pt);;所有文件 (*.*)",
+        )
+        if path:
+            self._settings.setValue("check_model_path", os.path.dirname(path))
+            self._model_file_label.setText(f"模型文件: {path}")
+            self._update_env_status()
+
+    def _select_dataset_dir(self):
+        """选择数据集目录"""
+        current_dir = self._settings.value("check_dataset_dir", PROJECT_ROOT)
+        dir_path = QFileDialog.getExistingDirectory(
+            self, "选择数据集目录", current_dir,
+        )
+        if dir_path:
+            self._settings.setValue("check_dataset_dir", dir_path)
+            self._dataset_dir_label.setText(f"数据集目录: {dir_path}")
+            self._update_env_status()
+
+    def _update_env_status(self):
+        """更新环境检查状态显示"""
+        # 模型文件状态
+        model_path = self._settings.value(
+            "check_model_path", os.path.join(OUTPUT_DIR, "best_model.pth")
+        )
+        model_exists = os.path.exists(model_path)
+        model_status = "✅ 已找到" if model_exists else "❌ 未找到"
+        self._model_file_label.setText(f"模型文件: {model_path} ({model_status})")
+
+        # 数据集目录状态
+        dataset_dir = self._settings.value(
+            "check_dataset_dir", os.path.join(PROJECT_ROOT, "CUB_200_2011", "CUB_200_2011")
+        )
+        dataset_exists = os.path.exists(dataset_dir)
+        dataset_status = "✅ 已找到" if dataset_exists else "❌ 未找到"
+        self._dataset_dir_label.setText(f"数据集目录: {dataset_dir} ({dataset_status})")
 
     # ===== 保存设置 =====
 

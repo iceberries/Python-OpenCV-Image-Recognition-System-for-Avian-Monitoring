@@ -40,6 +40,7 @@ class BatchRecognitionPage(QWidget):
         self._results: list = []
         self._worker: Optional[InferenceWorker] = None
         self._batch_start_time: float = 0
+        self._image_map: Dict[str, np.ndarray] = {}
 
         sm = ScaleManager.get()
         layout = QVBoxLayout(self)
@@ -61,12 +62,28 @@ class BatchRecognitionPage(QWidget):
         main_card_layout.setSpacing(16)
         main_card_layout.setContentsMargins(20, 20, 20, 20)
 
-        # 上传组件（批量模式）
+        # 上传组件（批量模式）- 调整高度策略使其更紧凑
         self.upload_component = UploadComponent(mode="batch")
-        main_card_layout.addWidget(self.upload_component, 1)  # 加 stretch，保证高度
+        self.upload_component.files_changed.connect(self._on_files_changed)
+        self.upload_component.images_ready.connect(self._on_images_ready)
+        # 设置上传组件在布局中的拉伸因子，使其不会过度占用空间
+        main_card_layout.addWidget(self.upload_component, 1)
 
-        # 操作行
+        # 操作行 - 四个按钮按指定比例排列（选择图片、清空、批量识别、取消）
         action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+
+        # 选择图片按钮 - stretch=2 (2/8)
+        self.upload_component.btn_upload.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        action_row.addWidget(self.upload_component.btn_upload)
+        action_row.setStretch(0, 2)
+
+        # 清空按钮 - stretch=2 (2/8)
+        self.upload_component.btn_clear.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        action_row.addWidget(self.upload_component.btn_clear)
+        action_row.setStretch(1, 2)
+
+        # 批量识别按钮 - stretch=3 (3/8)
         self.btn_run = QPushButton("🚀 批量识别")
         self.btn_run.setObjectName("PrimaryButton")
         self.btn_run.setCursor(Qt.PointingHandCursor)
@@ -75,16 +92,20 @@ class BatchRecognitionPage(QWidget):
         self.btn_run.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.btn_run.clicked.connect(self._run_batch)
         action_row.addWidget(self.btn_run)
+        action_row.setStretch(2, 5)
 
-        # 取消按钮
+        # 取消按钮 - stretch=1 (1/8)
         self.btn_cancel = QPushButton("⏹ 取消")
         self.btn_cancel.setObjectName("SecondaryButton")
         self.btn_cancel.setCursor(Qt.PointingHandCursor)
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.setMinimumHeight(sm.scale_int(self.BASE_BTN_MIN_H))
+        self.btn_cancel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.btn_cancel.clicked.connect(self._cancel_batch)
         action_row.addWidget(self.btn_cancel)
+        action_row.setStretch(3, 1)
 
+        # 进度条和标签
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
         self.progress_bar.hide()
@@ -163,6 +184,9 @@ class BatchRecognitionPage(QWidget):
         paths = self.upload_component.get_file_paths()
         if not paths:
             return
+        images = self.upload_component.get_images()
+        for path, img in zip(paths, images):
+            self._image_map[path] = img  # 保存映射
 
         # 检查模型
         manager = ModelManager.get()
@@ -201,6 +225,7 @@ class BatchRecognitionPage(QWidget):
             filenames=filenames,
             top_k=5,
             use_clahe=True,
+            return_heatmap=True,  # 热力图
         )
         self._worker.batchProgress.connect(self._on_progress)
         self._worker.batchFinished.connect(self._on_finished)
@@ -225,12 +250,24 @@ class BatchRecognitionPage(QWidget):
         else:
             self.progress_label.setText(f"{current}/{total}")
 
-        # 构建结果并更新 UI
+        # 查找对应的原始图片
+        filename = result.get("filename", "")
+        original_image = None
+        for path, img in self._image_map.items():
+            if path.endswith(filename) or filename in path:
+                original_image = img
+                break
+
+        # 构建完整结果
         rec_result = RecognitionResult(
-            filename=result.get("filename", ""),
+            filename=filename,
             class_name=result.get("class_name", ""),
             confidence=result.get("confidence", 0.0),
             latency=result.get("latency"),
+            image=original_image,
+            overlay_image=result.get("overlay_image"),  # 来自 manager.predict
+            heatmap=result.get("heatmap"),              # 来自 manager.predict
+            top_k=result.get("top_k", []),
         )
         self._results.append(rec_result)
         self.result_panel.add_result(rec_result)

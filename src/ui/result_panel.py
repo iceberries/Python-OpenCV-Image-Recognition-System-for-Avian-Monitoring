@@ -1130,12 +1130,25 @@ class BatchResultPanel(QWidget):
         if index < 0 or index >= len(self._results):
             return
         r = self._results[index]
-        panel = SingleResultPanel(show_heatmap=True)
-        panel.set_result(r)
+        
+        # 确保图片数据存在
+        if r.image is None and r.filename:
+            # 尝试从文件重新加载
+            try:
+                import cv2
+                img = cv2.imread(r.filename)
+                if img is not None:
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    r.image = img
+            except Exception:
+                pass
+        
+        panel = SingleResultPanel(show_heatmap=True)  # show_heatmap=True 确保热力图按钮显示
+        panel.set_result(r)  # set_result 会处理 overlay_image 和 heatmap
 
         dialog = QDialog(self.window())
         dialog.setWindowTitle(f"识别详情 - {r.filename}")
-        dialog.setMinimumSize(800, 500)
+        dialog.setMinimumSize(900, 600)  # 稍微大一点，容纳双栏
         dialog.setModal(True)
 
         d_layout = QVBoxLayout(dialog)

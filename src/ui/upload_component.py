@@ -243,10 +243,16 @@ class UploadComponent(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        # 空状态 / 拖拽区域
+        # 创建一个容器来存放 drop_zone 和 scroll_area，使它们共享相同空间
+        self.content_container = QWidget()
+        content_layout = QVBoxLayout(self.content_container)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+
+        # 空状态 / 拖拽区域 - 高度与滚动区域保持一致
         self.drop_zone = QFrame()
         self.drop_zone.setObjectName("UploadArea")
-        self.drop_zone.setMinimumHeight(sm.scale_int(160))
+        self.drop_zone.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         drop_layout = QVBoxLayout(self.drop_zone)
         drop_layout.setAlignment(Qt.AlignCenter)
         drop_layout.setSpacing(8)
@@ -270,7 +276,7 @@ class UploadComponent(QWidget):
                 "支持 JPG / PNG / BMP，单文件 ≤ 20MB，最多 50 张"
             )
 
-        layout.addWidget(self.drop_zone)
+        content_layout.addWidget(self.drop_zone)
 
         # 单图大预览
         self.preview_label = CenteredPixmapLabel()
@@ -284,7 +290,7 @@ class UploadComponent(QWidget):
         self.preview_label.hide()
         
         if self._mode == "single":
-            layout.addWidget(self.preview_label, 1)  # stretch factor 1，占满剩余空间
+            content_layout.addWidget(self.preview_label, 1)  # stretch factor 1，占满剩余空间
 
         # 批量缩略图网格（滚动区域）
         self.scroll_area = QScrollArea()
@@ -305,31 +311,31 @@ class UploadComponent(QWidget):
         for col in range(GRID_COLUMNS):
             self.grid_layout.setColumnStretch(col, 1)
         self.scroll_area.setWidget(self.grid_container)
-        self.scroll_area.setMinimumHeight(sm.scale_int(300))  # 新增
+        # 设置滚动区域的最小高度，与空状态区域保持一致
+        self.scroll_area.setMinimumHeight(sm.scale_int(350))
+        self.scroll_area.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         if self._mode == "batch":
-            layout.addWidget(self.scroll_area, 1)
+            content_layout.addWidget(self.scroll_area, 1)
 
-        # 按钮行
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+        # 将内容容器添加到主布局
+        layout.addWidget(self.content_container, 1)
 
+        # 按钮（供外部布局使用，不在组件内部添加按钮行）
         self.btn_upload = QPushButton("📁 选择图片")
         if self._mode == "batch":
             self.btn_upload.setText("📁 选择图片（多选）")
         self.btn_upload.setObjectName("SecondaryButton")
         self.btn_upload.setCursor(Qt.PointingHandCursor)
+        self.btn_upload.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.btn_upload.clicked.connect(self._on_click_upload)
-        btn_row.addWidget(self.btn_upload)
 
         self.btn_clear = QPushButton("🗑️ 清空")
         self.btn_clear.setObjectName("DangerButton")
         self.btn_clear.setCursor(Qt.PointingHandCursor)
         self.btn_clear.setEnabled(False)
+        self.btn_clear.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.btn_clear.clicked.connect(self.clear_all)
         self._update_btn_clear_style()
-        btn_row.addWidget(self.btn_clear)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
 
         # 文件计数标签（批量模式）
         self.count_label = QLabel("")
@@ -462,12 +468,14 @@ class UploadComponent(QWidget):
         """根据当前文件列表刷新视图"""
         has_files = len(self._file_paths) > 0
 
-        self.drop_zone.setVisible(not has_files)
         self.btn_clear.setEnabled(has_files)
 
         if self._mode == "single":
+            self.drop_zone.setVisible(not has_files)
             self._refresh_single(has_files)
         else:
+            # 批量模式下，drop_zone 和 scroll_area 共享空间
+            self.drop_zone.setVisible(not has_files)
             self._refresh_batch(has_files)
 
     def _refresh_single(self, has_files: bool):
@@ -574,9 +582,36 @@ class UploadComponent(QWidget):
             }}
         """)
 
+    def _update_btn_upload_style(self):
+        """更新上传按钮样式（缩放时调用）"""
+        sm = ScaleManager.get()
+        r = sm.scale_int(6)
+        p = f"{sm.scale_int(10)}px {sm.scale_int(24)}px"
+        fs = sm.scale_int(14)
+        self.btn_upload.setStyleSheet(f"""
+            QPushButton#SecondaryButton {{
+                background-color: transparent;
+                color: {PRIMARY_COLOR};
+                border: 1px solid {PRIMARY_COLOR};
+                border-radius: {r}px;
+                padding: {p};
+                font-size: {fs}px;
+            }}
+            QPushButton#SecondaryButton:hover {{
+                background-color: rgba(0,123,255,0.08);
+            }}
+            QPushButton#SecondaryButton:disabled {{
+                color: {BORDER_COLOR};
+                border-color: {BORDER_COLOR};
+            }}
+        """)
+
     def apply_scale(self, scale: float):
         sm = ScaleManager.get()
-        self.drop_zone.setMinimumHeight(sm.scale_int(160))
+        # 设置 drop_zone 和 scroll_area 的最小高度保持一致
+        scaled_height = sm.scale_int(350)
+        self.drop_zone.setMinimumHeight(scaled_height)
+        self.scroll_area.setMinimumHeight(scaled_height)
         if self._mode == "single":
             self.preview_label.setMinimumSize(sm.scale_int(200), sm.scale_int(200))
             self.preview_label.setMaximumSize(
@@ -586,6 +621,8 @@ class UploadComponent(QWidget):
             # CenteredPixmapLabel 内部已处理 resize，无需手动重缩放
 
         self._update_btn_clear_style()
+        # 更新上传按钮样式
+        self._update_btn_upload_style()
 
         sp = sm.scale_int(12)
         self.grid_layout.setSpacing(sp)

@@ -75,6 +75,7 @@ class InferenceWorker(QThread):
         filenames: List[str] = None,
         top_k: int = 5,
         use_clahe: bool = True,
+        return_heatmap: bool = True,
     ):
         """配置批量推理"""
         self._mode = "batch"
@@ -82,6 +83,7 @@ class InferenceWorker(QThread):
         self._batch_filenames = filenames or [f"image_{i}" for i in range(len(images))]
         self._top_k = top_k
         self._use_clahe = use_clahe
+        self._return_heatmap = return_heatmap
 
     # ==================== 取消 ====================
 
@@ -156,7 +158,7 @@ class InferenceWorker(QThread):
                     image,
                     top_k=self._top_k,
                     use_clahe=self._use_clahe,
-                    return_heatmap=False,
+                    return_heatmap=self._return_heatmap,  # 使用参数
                 )
                 result["filename"] = self._batch_filenames[i] if i < len(self._batch_filenames) else f"image_{i}"
                 result["latency"] = {
