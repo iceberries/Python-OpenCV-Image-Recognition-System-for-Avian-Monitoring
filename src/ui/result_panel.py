@@ -75,11 +75,12 @@ class RecognitionResult:
     class_name: str = ""
     confidence: float = 0.0
     top_k: List[Dict[str, object]] = field(default_factory=list)
-    image: Optional[np.ndarray] = None          # 原图 BGR
-    overlay_image: Optional[np.ndarray] = None   # 可视化叠加图 BGR
-    heatmap: Optional[np.ndarray] = None         # 热力图 [0,1]
-    latency: Optional[Dict[str, float]] = None   # {"preprocess": ms, "inference": ms, "postprocess": ms}
+    image: Optional[np.ndarray] = None
+    overlay_image: Optional[np.ndarray] = None
+    heatmap: Optional[np.ndarray] = None
+    latency: Optional[Dict[str, float]] = None
     filename: str = ""
+    taxonomy_path: Optional[Dict] = None  # 层次化分类学路径
 
 
 # ============================================================
@@ -550,13 +551,10 @@ class SingleResultPanel(QWidget):
         self.latency_display.set_latency(result.latency)
 
         # 分类学路径（层次化结果）
-        taxonomy_data = getattr(result, 'taxonomy_path', None)
-        if taxonomy_data is None and hasattr(result, '__dict__'):
-            taxonomy_data = result.__dict__.get('taxonomy_path', None)
-        if taxonomy_data:
+        if result.taxonomy_path:
             self.taxonomy_tree.set_taxonomy_path(
-                taxonomy_data.get('path', []),
-                taxonomy_data.get('stopped_at', ''),
+                result.taxonomy_path.get('path', []),
+                result.taxonomy_path.get('stopped_at', ''),
             )
             self.taxonomy_tree.show()
         else:

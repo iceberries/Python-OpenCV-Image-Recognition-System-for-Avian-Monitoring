@@ -167,6 +167,7 @@ class SingleRecognitionPage(QWidget):
             overlay_image=result.get("overlay_image"),
             heatmap=result.get("heatmap"),
             latency=result.get("latency"),
+            taxonomy_path=result.get("taxonomy_path"),
         )
 
         self.result_panel.set_result(rec_result)

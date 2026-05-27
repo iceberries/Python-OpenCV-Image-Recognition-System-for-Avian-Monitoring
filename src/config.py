@@ -119,5 +119,8 @@ HIERARCHICAL_THRESHOLDS = {
 # 是否使用级联式分类头
 HIERARCHICAL_CASCADE = True
 
+# 最低学习率（防止 Cosine Annealing 衰减过度）
+MIN_LR = 1e-5
+
 # --- 分类学一致性评估 ---
 TAXONOMIC_CONSISTENCY = True

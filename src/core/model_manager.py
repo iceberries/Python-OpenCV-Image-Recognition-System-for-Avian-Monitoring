@@ -234,15 +234,19 @@ class ModelManager(QObject):
         异步加载模型（不阻塞 UI）
 
         Args:
-            checkpoint_path: 权重文件路径，默认 output/best_model.pth
+            checkpoint_path: 权重文件路径，默认 output/best_model_hierarchical.pth
             device: 推理设备，默认自动检测
         """
         if checkpoint_path is None:
-            checkpoint_path = os.path.join(OUTPUT_DIR, "best_model.pth")
-
-        if not os.path.exists(checkpoint_path):
-            self.modelLoaded.emit(False, f"模型文件不存在: {checkpoint_path}")
-            return
+            # 优先层次化模型，回退扁平模型
+            for name in ("best_model_hierarchical.pth", "best_model.pth"):
+                p = os.path.join(OUTPUT_DIR, name)
+                if os.path.exists(p):
+                    checkpoint_path = p
+                    break
+            if checkpoint_path is None:
+                self.modelLoaded.emit(False, "未找到模型文件，请先训练或手动选择")
+                return
 
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -272,27 +276,37 @@ class ModelManager(QObject):
         self.modelLoaded.emit(success, message)
 
     def load_model_sync(self, checkpoint_path: str = None, device: str = None) -> Tuple[bool, str]:
-        """
-        同步加载模型（阻塞调用，仅用于初始化或测试）
-
-        Returns:
-            (success, message)
-        """
+        """同步加载模型（阻塞调用）"""
         if checkpoint_path is None:
-            checkpoint_path = os.path.join(OUTPUT_DIR, "best_model.pth")
+            for name in ("best_model_hierarchical.pth", "best_model.pth"):
+                p = os.path.join(OUTPUT_DIR, name)
+                if os.path.exists(p):
+                    checkpoint_path = p
+                    break
+            if checkpoint_path is None:
+                return False, "未找到模型文件"
         if not os.path.exists(checkpoint_path):
             return False, f"模型文件不存在: {checkpoint_path}"
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
         try:
-            from src.model import ResNet50BirdClassifier
-            model = ResNet50BirdClassifier(
-                num_classes=NUM_CLASSES,
-                pretrained=False,
-                use_se=USE_SE_ATTENTION,
-            )
             checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            model_type = checkpoint.get("model_type", "flat")
+
+            if model_type == "hierarchical":
+                from src.hierarchical_model import build_hierarchical_model
+                from src.taxonomy import TaxonomyTree
+                from src.config import CUB_HIERARCHY_DIR
+                taxonomy = TaxonomyTree(CUB_HIERARCHY_DIR)
+                taxonomy.parse()
+                model = build_hierarchical_model(taxonomy=taxonomy, backbone_name="resnet101")
+            else:
+                from src.model import ResNet50BirdClassifier
+                model = ResNet50BirdClassifier(
+                    num_classes=NUM_CLASSES, pretrained=False, use_se=USE_SE_ATTENTION,
+                )
+
             if "model_state_dict" in checkpoint:
                 model.load_state_dict(checkpoint["model_state_dict"])
             else:
@@ -303,6 +317,11 @@ class ModelManager(QObject):
             old_model = self._model
             self._model = model
             self._device = device
+            self._model_type = model_type
+            if model_type == "hierarchical":
+                self._taxonomy = taxonomy
+            else:
+                self._taxonomy = None
             self._param_info = count_parameters(model)
             self._checkpoint_meta = {
                 "best_accuracy": checkpoint.get("best_accuracy", "N/A"),
@@ -405,7 +424,7 @@ class ModelManager(QObject):
             raise RuntimeError("模型未加载")
 
         if self.is_hierarchical:
-            return self._predict_hierarchical(image, top_k, use_clahe)
+            return self._predict_hierarchical(image, top_k, use_clahe, return_heatmap)
         else:
             return self._predict_flat(image, top_k, use_clahe, return_heatmap)
 
@@ -462,6 +481,7 @@ class ModelManager(QObject):
         image: np.ndarray,
         top_k: int = 5,
         use_clahe: bool = True,
+        return_heatmap: bool = False,
     ) -> Dict:
         """层次化分类推理"""
         from src.hierarchical_model import TaxonomicInference
@@ -484,6 +504,15 @@ class ModelManager(QObject):
         result["latency_ms"] = latency_ms
         result["model_type"] = "hierarchical"
 
+        # 包装 taxonomy_path 供 UI 使用
+        result["taxonomy_path"] = {
+            "path": result.get("path", []),
+            "stopped_at": result.get("stopped_at", ""),
+            "stopped_reason": result.get("stopped_reason", ""),
+            "full_taxonomy_string": result.get("full_taxonomy_string", ""),
+            "is_confident": result.get("is_confident", False),
+        }
+
         # 提取顶层预测作为 class_name 和 confidence 兼容字段
         top_pred = result.get("top_prediction") or (
             result["path"][-1] if result["path"] else None
@@ -494,6 +523,21 @@ class ModelManager(QObject):
         else:
             result["class_name"] = "Unknown"
             result["confidence"] = 0.0
+
+        # 构建扁平 top_k（从最后一层 species 的 top_k 提取）
+        for node in reversed(result.get("path", [])):
+            if node.get("level") == "species" and node.get("top_k"):
+                result["top_k"] = [
+                    {"class_name": t["name"], "confidence": t["confidence"] / 100.0}
+                    for t in node["top_k"]
+                ]
+                break
+        if "top_k" not in result:
+            result["top_k"] = []
+
+        # Grad-CAM 热力图
+        if return_heatmap:
+            result["heatmap"] = self._generate_heatmap(image, input_tensor)
 
         if self._device == "cuda":
             torch.cuda.empty_cache()
@@ -537,25 +581,25 @@ class ModelManager(QObject):
     def _generate_heatmap(
         self, original_image: np.ndarray, input_tensor: torch.Tensor
     ) -> Optional[np.ndarray]:
-        """
-        生成 Grad-CAM 热力图
-
-        Args:
-            original_image: 原始 RGB 图像 (H, W, 3)
-            input_tensor: 预处理后的输入 (1, C, H, W)
-
-        Returns:
-            热力图 (H, W) float32 [0, 1]，失败返回 None
-        """
+        """生成 Grad-CAM 热力图（适配扁平/层次化模型）"""
         try:
             if self._grad_cam is None:
                 from src.attention_deform import GradCAM
-                # 尝试获取 backbone 的 layer4
-                if hasattr(self._model, 'backbone'):
+
+                if self.is_hierarchical:
+                    # 层次化模型：用 backbone 的 layer4 作为目标层
                     target = self._model.backbone.layer4
+                    # 创建一个只跑 backbone 的包装器
+                    grad_model = self._model.backbone
                 else:
-                    target = None
-                self._grad_cam = GradCAM(self._model, target_layer=target)
+                    # 扁平模型：ResNet50BirdClassifier
+                    if hasattr(self._model, 'backbone'):
+                        target = self._model.backbone.layer4
+                    else:
+                        target = None
+                    grad_model = self._model
+
+                self._grad_cam = GradCAM(grad_model, target_layer=target)
 
             heatmap = self._grad_cam.generate_upsampled(
                 input_tensor.clone().detach().to(self._device),
@@ -563,7 +607,6 @@ class ModelManager(QObject):
             )
             return heatmap
         except Exception:
-            # Grad-CAM 失败不阻塞推理
             return None
 
     def get_model_info(self) -> Dict:

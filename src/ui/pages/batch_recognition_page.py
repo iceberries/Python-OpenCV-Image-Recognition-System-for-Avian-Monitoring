@@ -265,9 +265,10 @@ class BatchRecognitionPage(QWidget):
             confidence=result.get("confidence", 0.0),
             latency=result.get("latency"),
             image=original_image,
-            overlay_image=result.get("overlay_image"),  # 来自 manager.predict
-            heatmap=result.get("heatmap"),              # 来自 manager.predict
+            overlay_image=result.get("overlay_image"),
+            heatmap=result.get("heatmap"),
             top_k=result.get("top_k", []),
+            taxonomy_path=result.get("taxonomy_path"),
         )
         self._results.append(rec_result)
         self.result_panel.add_result(rec_result)

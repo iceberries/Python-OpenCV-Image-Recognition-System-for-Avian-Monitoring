@@ -29,6 +29,7 @@ from torch.utils.data import DataLoader
 
 from tqdm import tqdm
 
+import src.config as config
 from src.hierarchical_model import HierarchicalBirdClassifier, TaxonomicInference
 from src.taxonomy import TaxonomyTree
 
@@ -298,6 +299,7 @@ class HierarchicalTrainer:
         for batch in pbar:
             images, labels = batch
             images = images.to(self.device, non_blocking=True)
+            labels = {k: v.to(self.device) for k, v in labels.items()}
 
             self.optimizer.zero_grad()
 
@@ -372,6 +374,7 @@ class HierarchicalTrainer:
         for batch in pbar:
             images, labels = batch
             images = images.to(self.device, non_blocking=True)
+            labels = {k: v.to(self.device) for k, v in labels.items()}
             bs = images.size(0)
 
             logits = self.model(images)
@@ -488,7 +491,7 @@ class HierarchicalTrainer:
             self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer,
                 T_max=stage1_end - start_epoch,
-                eta_min=1e-5,
+                eta_min=config.MIN_LR,
             )
 
             for epoch in range(start_epoch + 1, stage1_end + 1):
@@ -513,7 +516,7 @@ class HierarchicalTrainer:
             self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer,
                 T_max=stage2_end - max(stage1_end, start_epoch),
-                eta_min=1e-5,
+                eta_min=config.MIN_LR,
             )
 
             stage2_start_epoch = max(stage1_end, start_epoch)
@@ -540,7 +543,7 @@ class HierarchicalTrainer:
             self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer,
                 T_max=end_epoch - stage2_end,
-                eta_min=1e-6,
+                eta_min=config.MIN_LR,
             )
 
             for epoch in range(stage2_end + 1, end_epoch + 1):
