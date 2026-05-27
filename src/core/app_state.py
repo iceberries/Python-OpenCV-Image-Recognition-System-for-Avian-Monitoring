@@ -3,6 +3,7 @@
 
 管理跨页面共享状态，状态变更通过信号通知所有订阅者。
 """
+
 from PyQt5.QtCore import QObject, pyqtSignal
 
 
@@ -15,12 +16,14 @@ class AppState(QObject):
         is_model_ready: 模型是否已加载就绪
         is_inferencing: 是否正在推理中
         current_results: 最近一次识别结果
+        model_type: 模型类型 "flat" 或 "hierarchical"
     """
 
     # 状态变更信号
     modelStatusChanged = pyqtSignal(bool, str)       # (ready, model_name)
     inferencingChanged = pyqtSignal(bool)             # (is_inferencing)
     resultsUpdated = pyqtSignal(dict)                 # (latest_result)
+    taxonomyChanged = pyqtSignal(dict)                # (taxonomy_info)
 
     _instance = None
 
@@ -33,6 +36,7 @@ class AppState(QObject):
             cls._instance._is_model_ready = False
             cls._instance._is_inferencing = False
             cls._instance._current_results = {}
+            cls._instance._model_type = "flat"
         return cls._instance
 
     @property
@@ -73,3 +77,13 @@ class AppState(QObject):
     def current_results(self, value: dict):
         self._current_results = value
         self.resultsUpdated.emit(value)
+        if value.get("model_type") == "hierarchical":
+            self.taxonomyChanged.emit(value.get("taxonomy_path", {}))
+
+    @property
+    def model_type(self) -> str:
+        return self._model_type
+
+    @model_type.setter
+    def model_type(self, value: str):
+        self._model_type = value

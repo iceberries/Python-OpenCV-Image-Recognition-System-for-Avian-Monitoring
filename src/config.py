@@ -91,3 +91,33 @@ NUM_WORKERS = 4  # DataLoader 工作线程数
 
 # ==================== 随机种子 ====================
 RANDOM_SEED = 42
+
+# ================================================================
+#  CUB-Hierarchy 层次化分类 配置
+# ================================================================
+
+DATASET = "cub_hierarchy"
+CUB_HIERARCHY_DIR = os.path.join(PROJECT_ROOT, "CUB-Hierarchy")
+
+MODEL_NAME = "resnet101"
+
+# --- 层次化分类配置 ---
+# 各层级损失权重
+HIERARCHICAL_LOSS_WEIGHTS = {
+    'order': 0.15,
+    'family': 0.35,
+    'species': 1.0,
+}
+
+# 推理时各层级的置信度阈值
+HIERARCHICAL_THRESHOLDS = {
+    'order': 0.5,
+    'family': 0.5,
+    'species': 0.6,
+}
+
+# 是否使用级联式分类头
+HIERARCHICAL_CASCADE = True
+
+# --- 分类学一致性评估 ---
+TAXONOMIC_CONSISTENCY = True

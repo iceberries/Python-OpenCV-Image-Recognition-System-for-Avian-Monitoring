@@ -39,60 +39,24 @@ class ModelLoadWorker(QThread):
     def run(self):
         try:
             self.progress.emit(10)
-            # 构建模型
-            from src.model import ResNet50BirdClassifier
-            model = ResNet50BirdClassifier(
-                num_classes=NUM_CLASSES,
-                pretrained=False,
-                use_se=USE_SE_ATTENTION,
-            )
-            self.progress.emit(40)
-
-            # 加载权重
             checkpoint = torch.load(
                 self.checkpoint_path,
                 map_location="cpu",
                 weights_only=False,
             )
-            if "model_state_dict" in checkpoint:
-                model.load_state_dict(checkpoint["model_state_dict"])
+            self.progress.emit(20)
+
+            # 检测模型类型
+            model_type = checkpoint.get("model_type", "flat")
+
+            if model_type == "hierarchical":
+                self._load_hierarchical(checkpoint)
             else:
-                model.load_state_dict(checkpoint)
-            self.progress.emit(70)
-
-            # 移到目标设备
-            model.to(self.device)
-            model.eval()
-            self.progress.emit(85)
-
-            # 计算参数量
-            param_info = count_parameters(model)
-
-            # 更新 manager 状态
-            old_model = self.manager._model
-            self.manager._model = model
-            self.manager._device = self.device
-            self.manager._param_info = param_info
-            self.manager._checkpoint_meta = {
-                "best_accuracy": checkpoint.get("best_accuracy", "N/A"),
-                "best_epoch": checkpoint.get("best_epoch", "N/A"),
-            }
-
-            # 释放旧模型
-            if old_model is not None:
-                del old_model
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-
-            self.progress.emit(100)
-            self.finished.emit(True, f"模型加载成功: {os.path.basename(self.checkpoint_path)}")
-
+                self._load_flat(checkpoint)
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
-                # GPU OOM, 尝试降级到 CPU
                 try:
                     self.device = "cpu"
-                    # 重新执行（递归只允许一次降级）
                     self.run_cpu_fallback()
                 except Exception as e2:
                     self.finished.emit(False, f"GPU OOM 且 CPU 降级失败: {e2}")
@@ -100,6 +64,95 @@ class ModelLoadWorker(QThread):
                 self.finished.emit(False, f"模型加载失败: {e}")
         except Exception as e:
             self.finished.emit(False, f"模型加载失败: {e}")
+
+    def _load_hierarchical(self, checkpoint):
+        """加载层次化模型 (CUB-Hierarchy)"""
+        from src.hierarchical_model import build_hierarchical_model
+        from src.taxonomy import TaxonomyTree
+        from src.config import CUB_HIERARCHY_DIR, HIERARCHICAL_CASCADE
+
+        self.progress.emit(30)
+
+        hierarchy_dir = checkpoint.get("hierarchy_dir", CUB_HIERARCHY_DIR)
+        taxonomy = TaxonomyTree(hierarchy_dir)
+        taxonomy.parse()
+        self.progress.emit(45)
+
+        model = build_hierarchical_model(
+            taxonomy=taxonomy,
+            backbone_name="resnet101",
+            cascade=HIERARCHICAL_CASCADE,
+        )
+        self.progress.emit(60)
+
+        model.load_state_dict(checkpoint.get("model_state_dict", checkpoint))
+        self.progress.emit(80)
+
+        model.to(self.device)
+        model.eval()
+        self.progress.emit(90)
+
+        # 更新 manager 状态
+        old_model = self.manager._model
+        self.manager._model = model
+        self.manager._device = self.device
+        self.manager._model_type = "hierarchical"
+        self.manager._taxonomy = taxonomy
+        self.manager._param_info = count_parameters(model)
+        self.manager._checkpoint_meta = {
+            "best_accuracy": checkpoint.get("best_accuracy", "N/A"),
+            "best_epoch": checkpoint.get("best_epoch", "N/A"),
+        }
+
+        if old_model is not None:
+            del old_model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        self.progress.emit(100)
+        self.finished.emit(True, f"层次化模型加载成功: {os.path.basename(self.checkpoint_path)}")
+
+    def _load_flat(self, checkpoint):
+        """加载扁平分类模型（原有逻辑）"""
+        from src.model import ResNet50BirdClassifier
+        from src.config import NUM_CLASSES, USE_SE_ATTENTION
+
+        self.progress.emit(30)
+        model = ResNet50BirdClassifier(
+            num_classes=NUM_CLASSES,
+            pretrained=False,
+            use_se=USE_SE_ATTENTION,
+        )
+        self.progress.emit(60)
+
+        if "model_state_dict" in checkpoint:
+            model.load_state_dict(checkpoint["model_state_dict"])
+        else:
+            model.load_state_dict(checkpoint)
+        self.progress.emit(80)
+
+        model.to(self.device)
+        model.eval()
+        self.progress.emit(90)
+
+        old_model = self.manager._model
+        self.manager._model = model
+        self.manager._device = self.device
+        self.manager._model_type = "flat"
+        self.manager._taxonomy = None
+        self.manager._param_info = count_parameters(model)
+        self.manager._checkpoint_meta = {
+            "best_accuracy": checkpoint.get("best_accuracy", "N/A"),
+            "best_epoch": checkpoint.get("best_epoch", "N/A"),
+        }
+
+        if old_model is not None:
+            del old_model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        self.progress.emit(100)
+        self.finished.emit(True, f"模型加载成功: {os.path.basename(self.checkpoint_path)}")
 
     def run_cpu_fallback(self):
         """GPU OOM 后的 CPU 降级"""
@@ -163,6 +216,8 @@ class ModelManager(QObject):
                     super(ModelManager, obj).__init__()
                     obj._model = None
                     obj._device = "cpu"
+                    obj._model_type = "flat"
+                    obj._taxonomy = None
                     obj._class_names = []
                     obj._param_info = {"total": 0, "trainable": 0}
                     obj._checkpoint_meta = {}
@@ -285,6 +340,14 @@ class ModelManager(QObject):
         return self._device
 
     @property
+    def model_type(self) -> str:
+        return self._model_type
+
+    @property
+    def is_hierarchical(self) -> bool:
+        return self._model_type == "hierarchical"
+
+    @property
     def class_names(self) -> List[str]:
         return self._class_names
 
@@ -295,6 +358,10 @@ class ModelManager(QObject):
     @property
     def checkpoint_meta(self) -> Dict:
         return self._checkpoint_meta
+
+    @property
+    def taxonomy(self):
+        return self._taxonomy
 
     def preprocess(self, image: np.ndarray, use_clahe: bool = True) -> torch.Tensor:
         """
@@ -322,13 +389,7 @@ class ModelManager(QObject):
         return_heatmap: bool = False,
     ) -> Dict:
         """
-        单图推理
-
-        Args:
-            image: RGB 图像 (H, W, 3), uint8
-            top_k: 返回 Top-K 结果
-            use_clahe: 是否 CLAHE 预处理
-            return_heatmap: 是否生成 Grad-CAM 热力图
+        单图推理（自动路由到扁平或层次化推理）
 
         Returns:
             {
@@ -336,24 +397,35 @@ class ModelManager(QObject):
                 "confidence": float (0~1),
                 "top_k": [{"class_name": str, "confidence": float}, ...],
                 "latency_ms": float,
-                "heatmap": Optional[np.ndarray (H,W) float [0,1]],
+                "heatmap": Optional[np.ndarray],
+                "taxonomy_path": dict (仅层次化模型),
             }
         """
         if self._model is None:
             raise RuntimeError("模型未加载")
 
+        if self.is_hierarchical:
+            return self._predict_hierarchical(image, top_k, use_clahe)
+        else:
+            return self._predict_flat(image, top_k, use_clahe, return_heatmap)
+
+    def _predict_flat(
+        self,
+        image: np.ndarray,
+        top_k: int = 5,
+        use_clahe: bool = True,
+        return_heatmap: bool = False,
+    ) -> Dict:
+        """扁平分类推理（原有逻辑）"""
         t0 = time.perf_counter()
 
-        # 预处理
         input_tensor = self.preprocess(image, use_clahe=use_clahe)
         input_tensor = input_tensor.to(self._device)
 
-        # 推理
         with torch.no_grad():
             output = self._model(input_tensor)
             probs = F.softmax(output, dim=1)
 
-        # 后处理
         probs_np = probs.cpu().numpy()[0]
         top_indices = np.argsort(probs_np)[::-1][:top_k]
 
@@ -369,12 +441,10 @@ class ModelManager(QObject):
         confidence = top_k_results[0]["confidence"] if top_k_results else 0.0
         latency_ms = (time.perf_counter() - t0) * 1000
 
-        # Grad-CAM 热力图（可选）
         heatmap = None
         if return_heatmap:
             heatmap = self._generate_heatmap(image, input_tensor)
 
-        # 清理 GPU 缓存
         if self._device == "cuda":
             torch.cuda.empty_cache()
 
@@ -384,7 +454,51 @@ class ModelManager(QObject):
             "top_k": top_k_results,
             "latency_ms": latency_ms,
             "heatmap": heatmap,
+            "model_type": "flat",
         }
+
+    def _predict_hierarchical(
+        self,
+        image: np.ndarray,
+        top_k: int = 5,
+        use_clahe: bool = True,
+    ) -> Dict:
+        """层次化分类推理"""
+        from src.hierarchical_model import TaxonomicInference
+        from src.config import HIERARCHICAL_THRESHOLDS
+
+        t0 = time.perf_counter()
+
+        input_tensor = self.preprocess(image, use_clahe=use_clahe)
+        input_tensor = input_tensor.to(self._device)
+
+        inference = TaxonomicInference(
+            model=self._model,
+            taxonomy=self._taxonomy,
+            thresholds=HIERARCHICAL_THRESHOLDS,
+            device=self._device,
+        )
+
+        result = inference.predict(input_tensor, top_k_per_level=top_k)
+        latency_ms = (time.perf_counter() - t0) * 1000
+        result["latency_ms"] = latency_ms
+        result["model_type"] = "hierarchical"
+
+        # 提取顶层预测作为 class_name 和 confidence 兼容字段
+        top_pred = result.get("top_prediction") or (
+            result["path"][-1] if result["path"] else None
+        )
+        if top_pred:
+            result["class_name"] = top_pred["name"]
+            result["confidence"] = top_pred["confidence"] / 100.0
+        else:
+            result["class_name"] = "Unknown"
+            result["confidence"] = 0.0
+
+        if self._device == "cuda":
+            torch.cuda.empty_cache()
+
+        return result
 
     def predict_batch(
         self,

@@ -491,6 +491,11 @@ class SingleResultPanel(QWidget):
         right_layout.addWidget(self.top_k_chart)
 
         # 推理耗时
+        # 分类学路径（层次化模型专用）
+        self.taxonomy_tree = TaxonomyTreeWidget()
+        self.taxonomy_tree.hide()
+        right_layout.addWidget(self.taxonomy_tree)
+
         right_layout.addStretch()
         self.latency_display = LatencyDisplay()
         right_layout.addWidget(self.latency_display)
@@ -543,6 +548,19 @@ class SingleResultPanel(QWidget):
 
         # 延迟
         self.latency_display.set_latency(result.latency)
+
+        # 分类学路径（层次化结果）
+        taxonomy_data = getattr(result, 'taxonomy_path', None)
+        if taxonomy_data is None and hasattr(result, '__dict__'):
+            taxonomy_data = result.__dict__.get('taxonomy_path', None)
+        if taxonomy_data:
+            self.taxonomy_tree.set_taxonomy_path(
+                taxonomy_data.get('path', []),
+                taxonomy_data.get('stopped_at', ''),
+            )
+            self.taxonomy_tree.show()
+        else:
+            self.taxonomy_tree.hide()
 
     def show_empty(self):
         """显示空状态"""
@@ -1170,3 +1188,182 @@ class BatchResultPanel(QWidget):
     def apply_scale(self, scale: float):
         """缩放面板尺寸"""
         pass
+
+
+# ============================================================
+#  分类学树形路径展示组件（层次化分类专用）
+# ============================================================
+
+class TaxonomyTreeWidget(QWidget):
+    """
+    分类学路径可视化组件
+
+    以缩进树形结构展示分类学路径：
+      目 → 科 → 属 → 种 → 视觉类别
+
+    高亮已确定层级，灰色显示未确定/已停止层级。
+    每级显示名称 + 置信度 + 通过/未通过状态。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._taxonomy_path: list = []
+        self._stopped_at: str = ""
+        self._init_ui()
+
+    def _init_ui(self):
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(4)
+
+        # 标题
+        title = QLabel("分类学路径")
+        title.setStyleSheet(f"""
+            color: {TEXT_PRIMARY};
+            font-size: 14px;
+            font-weight: bold;
+            border: none;
+        """)
+        self.main_layout.addWidget(title)
+
+        # 路径容器
+        self.path_container = QWidget()
+        self.path_layout = QVBoxLayout(self.path_container)
+        self.path_layout.setContentsMargins(8, 4, 8, 4)
+        self.path_layout.setSpacing(6)
+        self.path_container.setStyleSheet(f"""
+            background: {CARD_BG};
+            border-radius: 8px;
+            border: 1px solid {BORDER_COLOR};
+        """)
+        self.main_layout.addWidget(self.path_container)
+
+        # 空状态
+        self.empty_label = QLabel("暂无分类学信息")
+        self.empty_label.setStyleSheet(f"color: {TEXT_SECONDARY}; border: none;")
+        self.path_layout.addWidget(self.empty_label)
+
+    def set_taxonomy_path(self, path: list, stopped_at: str = ""):
+        """
+        设置分类学路径
+
+        Args:
+            path: [{'level': 'order', 'name': '...', 'confidence': 95.0,
+                    'passed_threshold': True}, ...]
+            stopped_at: 停止的层级名
+        """
+        self._taxonomy_path = path
+        self._stopped_at = stopped_at
+        self._refresh()
+
+    def _refresh(self):
+        # 清空旧内容
+        while self.path_layout.count():
+            item = self.path_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not self._taxonomy_path:
+            self.path_layout.addWidget(self.empty_label)
+            return
+
+        level_icons = {
+            'order': '🔬', 'family': '🏠', 'genus': '🌿',
+            'species': '🐦', 'visual': '👁️',
+        }
+        level_labels = {
+            'order': '目', 'family': '科', 'genus': '属',
+            'species': '种', 'visual': '视觉类别',
+        }
+
+        for i, node in enumerate(self._taxonomy_path):
+            level = node.get('level', '')
+            name = node.get('name', '?')
+            confidence = node.get('confidence', 0.0)
+            passed = node.get('passed_threshold', True)
+
+            is_stopped = (level == self._stopped_at and not passed)
+
+            # 行容器
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(i * 16 + 4, 2, 4, 2)
+            row_layout.setSpacing(6)
+
+            # 图标
+            icon = level_icons.get(level, '❓')
+            icon_label = QLabel(icon)
+            icon_label.setStyleSheet("font-size: 16px; border: none;")
+            row_layout.addWidget(icon_label)
+
+            # 层级标签
+            lbl = level_labels.get(level, level)
+            level_label = QLabel(lbl)
+            level_label.setStyleSheet(f"""
+                color: {TEXT_SECONDARY};
+                font-size: 12px;
+                border: none;
+            """)
+            row_layout.addWidget(level_label)
+
+            # 名称
+            if is_stopped:
+                name_color = WARNING_COLOR
+                name_suffix = " (不确定)"
+            elif not passed:
+                name_color = DANGER_COLOR
+                name_suffix = " (低于阈值)"
+            else:
+                name_color = SUCCESS_COLOR
+                name_suffix = ""
+
+            name_label = QLabel(f"{name}{name_suffix}")
+            name_label.setStyleSheet(f"""
+                color: {name_color};
+                font-size: 14px;
+                font-weight: bold;
+                border: none;
+            """)
+            row_layout.addWidget(name_label)
+            row_layout.addStretch()
+
+            # 置信度
+            conf_color = SUCCESS_COLOR if passed else WARNING_COLOR
+            conf_label = QLabel(f"{confidence:.1f}%")
+            conf_label.setStyleSheet(f"""
+                color: {conf_color};
+                font-size: 13px;
+                border: none;
+            """)
+            row_layout.addWidget(conf_label)
+
+            # 状态标记
+            status = "✓" if passed else "✗"
+            status_label = QLabel(status)
+            status_label.setStyleSheet(f"""
+                color: {conf_color};
+                font-size: 14px;
+                font-weight: bold;
+                border: none;
+            """)
+            row_layout.addWidget(status_label)
+
+            self.path_layout.addWidget(row)
+
+            # 如果已停止，添加停止线
+            if is_stopped:
+                stop_row = QWidget()
+                stop_layout = QHBoxLayout(stop_row)
+                stop_layout.setContentsMargins(i * 16 + 4, 0, 4, 0)
+                stop_msg = QLabel("── 置信度不足，分类停止于此 ──")
+                stop_msg.setStyleSheet(f"""
+                    color: {WARNING_COLOR};
+                    font-size: 11px;
+                    font-style: italic;
+                    border: none;
+                """)
+                stop_layout.addWidget(stop_msg)
+                self.path_layout.addWidget(stop_row)
+
+    def clear(self):
+        self.set_taxonomy_path([])

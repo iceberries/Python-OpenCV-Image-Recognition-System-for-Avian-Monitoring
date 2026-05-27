@@ -12,7 +12,9 @@ set -e
 EPOCHS=30
 BATCH_SIZE=32
 USE_CPU=false
-PROJECT_DIR="/app"              # Docker 内固定路径
+USE_NABIRDS=false
+HIERARCHICAL=false
+PROJECT_DIR="/app"
 CUDA_VERSION="cu118"
 
 for arg in "$@"; do
@@ -20,11 +22,15 @@ for arg in "$@"; do
         --cpu)        USE_CPU=true ;;
         --epochs=*)   EPOCHS="${arg#*=}" ;;
         --batch_size=*) BATCH_SIZE="${arg#*=}" ;;
+        --nabirds)    USE_NABIRDS=true; HIERARCHICAL=true ;;
+        --hierarchical) HIERARCHICAL=true ;;
         --help|-h)
             echo "用法: bash train.sh [选项]"
-            echo "  --cpu          强制使用 CPU (仅宿主机模式生效)"
-            echo "  --epochs=N     训练轮次 (默认 30)"
-            echo "  --batch_size=N 批次大小 (默认 32)"
+            echo "  --cpu            强制使用 CPU"
+            echo "  --epochs=N        训练轮次 (默认 30)"
+            echo "  --batch_size=N    批次大小 (默认 32)"
+            echo "  --nabirds         使用 NABirds 数据集 + ResNet110 层次化训练"
+            echo "  --hierarchical    启用层次化分类模式"
             exit 0 ;;
     esac
 done
@@ -156,15 +162,26 @@ run_training() {
     printf "  %-10s %s\n" "轮次:" "$EPOCHS"
     printf "  %-10s %s\n" "批次:" "$BATCH_SIZE"
     printf "  %-10s %s\n" "设备:" "$(if $USE_CPU; then echo 'CPU'; else echo 'GPU (auto)'; fi)"
+    if $HIERARCHICAL; then
+        printf "  %-10s %s\n" "模式:" "层次化 (ResNet110 + NABirds)"
+    fi
     echo "============================================================"
     echo ""
 
     cd "$PROJECT_DIR"
 
-    # main.py 通过 config.DEVICE 自动选择设备, 无需传 --cpu
-    python -m src.main \
-        --epochs "$EPOCHS" \
-        --batch_size "$BATCH_SIZE"
+    if $HIERARCHICAL; then
+        python -m src.main \
+            --dataset nabirds \
+            --model resnet110 \
+            --hierarchical \
+            --epochs "$EPOCHS" \
+            --batch_size "$BATCH_SIZE"
+    else
+        python -m src.main \
+            --epochs "$EPOCHS" \
+            --batch_size "$BATCH_SIZE"
+    fi
 
     echo ""
     if [[ -f "$PROJECT_DIR/output/best_model.pth" ]]; then

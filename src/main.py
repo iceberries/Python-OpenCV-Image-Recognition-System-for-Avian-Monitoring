@@ -13,6 +13,7 @@
 import os
 import sys
 import argparse
+import json
 import random
 import numpy as np
 
@@ -25,6 +26,14 @@ if PROJECT_ROOT not in sys.path:
 import src.config as config
 from src.dataset import create_dataloaders
 from src.model import ResNet50BirdClassifier, Trainer, TestTimeAugmentation
+from src.cub_hierarchy_dataset import create_cub_hierarchy_dataloaders
+from src.taxonomy import TaxonomyTree
+from src.hierarchical_model import (
+    HierarchicalBirdClassifier,
+    build_hierarchical_model,
+    TaxonomicInference,
+)
+from src.hierarchical_trainer import HierarchicalTrainer
 
 
 def set_seed(seed: int = 42):
@@ -77,6 +86,18 @@ def parse_args():
     parser.add_argument("--tta", action="store_true",
                         help="使用测试时增强进行评估")
 
+    # 数据集与模型选择参数
+    parser.add_argument("--dataset", type=str, default=None,
+                        choices=["cub200", "cub_hierarchy"],
+                        help="数据集: cub200 / cub_hierarchy")
+    parser.add_argument("--model", type=str, default=None,
+                        choices=["resnet50", "resnet101"],
+                        help="模型: resnet50 / resnet101")
+    parser.add_argument("--hierarchical", action="store_true",
+                        help="启用层次化分类训练")
+    parser.add_argument("--hierarchy_dir", type=str, default=None,
+                        help="CUB-Hierarchy 目录 (含 cub.parent-child.txt)")
+
     return parser.parse_args()
 
 
@@ -95,6 +116,148 @@ def main():
     config.USE_COSINE_LR = not args.no_cosine_lr
     config.USE_SE_ATTENTION = not args.no_se
 
+    # 确定数据集和模型类型
+    dataset_type = args.dataset or config.DATASET
+    model_type = args.model or config.MODEL_NAME
+    use_hierarchical = args.hierarchical or dataset_type == "cub_hierarchy"
+
+    if use_hierarchical:
+        run_hierarchical_training(args, model_type)
+    else:
+        run_flat_training(args)
+
+
+def run_hierarchical_training(args, model_type: str):
+    """层次化分类训练 (CUB-Hierarchy + ResNet)"""
+    print("=" * 60)
+    print("  CUB-Hierarchy 层次化鸟类分类")
+    print(f"  模型: {model_type} + 级联分类头")
+    print("=" * 60)
+    print(f"  批次大小:       {args.batch_size}")
+    print(f"  训练轮次:       {args.epochs}")
+    print(f"  级联分类头:     {'是' if config.HIERARCHICAL_CASCADE else '否'}")
+    print(f"  设备:           {config.DEVICE}")
+    if torch.cuda.is_available():
+        print(f"  GPU:            {torch.cuda.get_device_name(0)}")
+    print("=" * 60)
+
+    hierarchy_dir = args.hierarchy_dir or config.CUB_HIERARCHY_DIR
+    print(f"\n解析 CUB-Hierarchy: {hierarchy_dir}")
+    taxonomy = TaxonomyTree(hierarchy_dir)
+    taxonomy.parse()
+    print(taxonomy.summary())
+
+    print("\n加载数据集...")
+    train_loader, val_loader = create_cub_hierarchy_dataloaders(
+        cub_root=config.DATASET_ROOT,
+        hierarchy_dir=hierarchy_dir,
+        taxonomy=taxonomy,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        input_size=config.INPUT_SIZE,
+        use_augmentation=not args.no_aug,
+    )
+
+    # --- 构建模型 ---
+    print("\n构建层次化分类模型...")
+    model = build_hierarchical_model(
+        taxonomy=taxonomy,
+        backbone_name=model_type,
+        cascade=config.HIERARCHICAL_CASCADE,
+        dropout=0.5,
+    )
+
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"总参数量: {total_params:,}")
+    print(f"可训练参数: {trainable_params:,}")
+
+    # --- 恢复训练 ---
+    start_epoch = 0
+    if args.resume and os.path.exists(args.resume):
+        print(f"\n恢复训练: 加载检查点 {args.resume}")
+        checkpoint = torch.load(args.resume, map_location=config.DEVICE)
+        model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
+        start_epoch = checkpoint.get('best_epoch', 0)
+        print(f"  ✓ 恢复自 Epoch {start_epoch}")
+
+    # --- 评估模式 ---
+    if args.eval:
+        checkpoint_path = args.checkpoint or os.path.join(
+            config.OUTPUT_DIR, "best_model_hierarchical.pth"
+        )
+        if os.path.exists(checkpoint_path):
+            print(f"\n加载模型: {checkpoint_path}")
+            ckpt = torch.load(checkpoint_path, map_location=config.DEVICE, weights_only=False)
+            model.load_state_dict(ckpt.get('model_state_dict', ckpt))
+            model.to(config.DEVICE)
+            model.eval()
+
+            # 验证
+            trainer = HierarchicalTrainer(
+                model=model,
+                taxonomy=taxonomy,
+                output_dir=config.OUTPUT_DIR,
+            )
+            val_loss, val_accs, preds, labels = trainer.validate(val_loader)
+            print(f"\n验证集结果:")
+            for level in model.LEVELS:
+                print(f"  {level:>12s}: {val_accs.get(level, 0):.2f}%")
+            if taxonomy is not None:
+                tax_cons = trainer.compute_taxonomic_consistency(preds, labels)
+                print(f"  分类学一致性: {tax_cons:.2f}%")
+        else:
+            print(f"错误: 模型文件不存在: {checkpoint_path}")
+        return
+
+    # --- 训练 ---
+    print(f"\n开始层次化训练 (从 Epoch {start_epoch + 1} 开始)...")
+
+    trainer = HierarchicalTrainer(
+        model=model,
+        loss_weights=config.HIERARCHICAL_LOSS_WEIGHTS,
+        output_dir=config.OUTPUT_DIR,
+        taxonomy=taxonomy,
+    )
+
+    history = trainer.fit(
+        train_loader=train_loader,
+        val_loader=val_loader,
+        num_epochs=args.epochs,
+        start_epoch=start_epoch,
+        mixup_alpha=0 if args.no_mixup else config.MIXUP_ALPHA,
+        cutmix_alpha=0 if args.no_mixup else config.CUTMIX_ALPHA,
+    )
+
+    # --- 最终评估 ---
+    print("\n最终评估...")
+    best_path = os.path.join(config.OUTPUT_DIR, "best_model_hierarchical.pth")
+    if os.path.exists(best_path):
+        ckpt = torch.load(best_path, map_location=config.DEVICE, weights_only=False)
+        model.load_state_dict(ckpt.get('model_state_dict', ckpt))
+        model.to(config.DEVICE)
+        model.eval()
+
+        val_loss, val_accs, preds, labels = trainer.validate(val_loader)
+        print(f"最终验证集结果:")
+        for level in model.LEVELS:
+            print(f"  {level:>12s}: {val_accs.get(level, 0):.2f}%")
+        tax_cons = trainer.compute_taxonomic_consistency(preds, labels)
+        print(f"  分类学一致性: {tax_cons:.2f}%")
+
+        # 保存 taxonomy 信息到输出目录
+        taxonomy_info = {
+            'num_classes': model.num_classes,
+            'level_names': taxonomy.level_names,
+            'thresholds': config.HIERARCHICAL_THRESHOLDS,
+        }
+        with open(os.path.join(config.OUTPUT_DIR, "taxonomy_info.json"), 'w', encoding='utf-8') as f:
+            json.dump(taxonomy_info, f, ensure_ascii=False, indent=2)
+        print(f"分类学信息已保存至: output/taxonomy_info.json")
+
+
+def run_flat_training(args):
+    """原有的扁平分类训练（ResNet50 + CUB-200）"""
     print("=" * 60)
     print("  CUB-200-2011 鸟类图像识别系统 (改进版)")
     print("  模型: ResNet50 + SE-Net + 改进分类头")

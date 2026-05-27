@@ -36,6 +36,12 @@ import src.config as config
 from src.dataset import get_class_names
 from src.model import ResNet50BirdClassifier, Trainer, TestTimeAugmentation
 from src.preprocessing import resize_image, normalize_image, to_tensor, apply_clahe
+from src.taxonomy import TaxonomyTree
+from src.hierarchical_model import (
+    HierarchicalBirdClassifier,
+    build_hierarchical_model,
+    TaxonomicInference,
+)
 
 
 def load_and_preprocess_image(image_path: str, use_clahe: bool = True) -> torch.Tensor:
@@ -215,33 +221,135 @@ def visualize_prediction(image_path: str, results: list, save_path: str = None):
         print(f"结果已保存到: {save_path}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="鸟类图像预测 (支持 TTA)")
+# ============================================================
+#  层次化预测
+# ============================================================
 
-    parser.add_argument("--image", type=str, default=None,
-                        help="单张图像路径")
-    parser.add_argument("--dir", type=str, default=None,
-                        help="图像目录路径")
+def run_hierarchical_predict(args):
+    """层次化推理 (CUB-Hierarchy)"""
+    hierarchy_dir = args.hierarchy_dir or config.CUB_HIERARCHY_DIR
+    print(f"解析 CUB-Hierarchy: {hierarchy_dir}")
+    taxonomy = TaxonomyTree(hierarchy_dir)
+    taxonomy.parse()
+    print(taxonomy.summary())
+
+    print("\n构建层次化模型...")
+    model = build_hierarchical_model(
+        taxonomy=taxonomy,
+        cascade=config.HIERARCHICAL_CASCADE,
+    )
+
+    # 加载权重
+    checkpoint_path = args.checkpoint or os.path.join(
+        config.OUTPUT_DIR, "best_model_hierarchical.pth"
+    )
+    if not os.path.exists(checkpoint_path):
+        print(f"错误: 模型文件不存在: {checkpoint_path}")
+        sys.exit(1)
+
+    print(f"加载权重: {checkpoint_path}")
+    device = config.DEVICE
+    if device == "cuda" and not torch.cuda.is_available():
+        device = "cpu"
+
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    model.load_state_dict(ckpt.get('model_state_dict', ckpt))
+    model.to(device)
+    model.eval()
+
+    # 创建推理引擎
+    inference = TaxonomicInference(
+        model=model,
+        taxonomy=taxonomy,
+        thresholds=config.HIERARCHICAL_THRESHOLDS,
+        device=device,
+    )
+
+    print(f"使用设备: {device}")
+    print(f"阈值: Order={config.HIERARCHICAL_THRESHOLDS['order']:.1f}, "
+          f"Family={config.HIERARCHICAL_THRESHOLDS['family']:.1f}, "
+          f"Genus={config.HIERARCHICAL_THRESHOLDS['genus']:.1f}, "
+          f"Species={config.HIERARCHICAL_THRESHOLDS['species']:.1f}")
+    print("=" * 60)
+
+    # 单张推理
+    if args.image:
+        print(f"\n图像: {args.image}")
+        tensor = load_and_preprocess_image(args.image).to(device)
+        result = inference.predict(tensor, top_k_per_level=args.top_k)
+        _print_hierarchical_result(result)
+
+    # 批量推理
+    if args.dir:
+        image_extensions = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tiff")
+        image_files = []
+        for ext in image_extensions:
+            image_files.extend(glob(os.path.join(args.dir, ext)))
+            image_files.extend(glob(os.path.join(args.dir, "**", ext), recursive=True))
+        image_files = sorted(set(image_files))
+
+        print(f"\n在 {args.dir} 中找到 {len(image_files)} 张图像")
+        for i, img_path in enumerate(image_files, 1):
+            print(f"\n[{i}/{len(image_files)}] {os.path.basename(img_path)}")
+            try:
+                tensor = load_and_preprocess_image(img_path).to(device)
+                result = inference.predict(tensor, top_k_per_level=args.top_k)
+                _print_hierarchical_result(result)
+            except Exception as e:
+                print(f"  错误: {e}")
+
+
+def _print_hierarchical_result(result: dict):
+    """格式化打印层次化推理结果"""
+    print(f"  分类学路径: {result['full_taxonomy_string']}")
+    print(f"  停止层级: {result['stopped_at']} ({result['stopped_reason']})")
+
+    for level_info in result['path']:
+        level = level_info['level']
+        name = level_info['name']
+        conf = level_info['confidence']
+        passed = "✓" if level_info['passed_threshold'] else "✗"
+
+        if level_info['level'] == result['stopped_at'] and result['stopped_reason'] == 'below_threshold':
+            print(f"    [{passed}] {level:>10s}: {name:30s} ({conf:.1f}%) ← 低于阈值，停止")
+            # 显示 Top-K 候选
+            for alt in level_info['top_k'][:3]:
+                print(f"         候选: {alt['name']:30s} ({alt['confidence']:.1f}%)")
+            break
+        else:
+            print(f"    [{passed}] {level:>10s}: {name:30s} ({conf:.1f}%)")
+
+    print(f"  全部确定: {'是' if result['is_confident'] else '否'}")
+    print("-" * 40)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="鸟类图像预测 (支持 TTA + 层次化)")
+    parser.add_argument("--image", type=str, default=None)
+    parser.add_argument("--dir", type=str, default=None)
     parser.add_argument("--checkpoint", type=str,
-                        default=os.path.join(config.OUTPUT_DIR, "best_model.pth"),
-                        help="模型权重路径")
-    parser.add_argument("--data_dir", type=str, default=None,
-                        help="数据集根目录 (用于获取类别名称)")
-    parser.add_argument("--top_k", type=int, default=5,
-                        help="显示 Top-K 预测结果 (默认: 5)")
-    parser.add_argument("--tta", action="store_true",
-                        help="使用测试时增强 (TTA) 提升准确率")
-    parser.add_argument("--no_se", action="store_true",
-                        help="模型不使用 SE-Net 注意力模块")
-    parser.add_argument("--visualize", action="store_true",
-                        help="可视化预测结果")
-    parser.add_argument("--save_dir", type=str, default=None,
-                        help="可视化结果保存目录")
+                        default=os.path.join(config.OUTPUT_DIR, "best_model.pth"))
+    parser.add_argument("--data_dir", type=str, default=None)
+    parser.add_argument("--top_k", type=int, default=5)
+    parser.add_argument("--tta", action="store_true")
+    parser.add_argument("--no_se", action="store_true")
+    parser.add_argument("--visualize", action="store_true")
+    parser.add_argument("--save_dir", type=str, default=None)
+    parser.add_argument("--hierarchical", action="store_true",
+                        help="使用层次化分类模型进行推理")
+    parser.add_argument("--hierarchy_dir", type=str, default=None,
+                        help="CUB-Hierarchy 目录 (含 cub.parent-child.txt)")
 
     args = parser.parse_args()
 
     if not args.image and not args.dir:
         parser.error("请指定 --image 或 --dir 参数")
+
+    # --- 层次化推理 ---
+    if args.hierarchical:
+        run_hierarchical_predict(args)
+        return
+
     if not os.path.exists(args.checkpoint):
         print(f"错误: 模型文件不存在: {args.checkpoint}")
         print("请先运行训练: python -m src.main")
