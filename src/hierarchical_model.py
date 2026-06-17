@@ -169,16 +169,24 @@ class TaxonomicInference:
                 'level': level, 'name': self._name(level, top_idx.item()),
                 'class_id': top_idx.item(), 'confidence': round(max_prob.item() * 100, 2),
                 'top_k': topk_list, 'passed_threshold': passed,
+                'depth': self._get_depth(level, top_idx.item()),
             })
 
             if not passed:
                 stopped_at, stopped_reason, all_confident = level, 'below_threshold', False
+                # --- 物种级置信度不足时，沿分类学树回退到父节点 ---
+                if level == 'species':
+                    parent_info = self._get_parent_fallback(level, top_idx.item(), logits_list[i])
+                    if parent_info:
+                        result_path.insert(-1, parent_info)
+                    stopped_at = parent_info['level'] if parent_info else level
                 break
 
         taxonomy_str = " → ".join(
             f"{r['name']} ({r['confidence']:.0f}%)"
+            if r.get('passed_threshold', True)
+            else f"{r['name']} (⚠{r['confidence']:.0f}%)"
             for r in result_path
-            if not (r['level'] == stopped_at and stopped_reason == 'below_threshold')
         )
         return {'stopped_at': stopped_at, 'stopped_reason': stopped_reason,
                 'path': result_path, 'full_taxonomy_string': taxonomy_str,
@@ -186,8 +194,48 @@ class TaxonomicInference:
                 'top_prediction': result_path[-1] if result_path else None}
 
     def _name(self, level: str, cid: int) -> str:
+        names_zh = getattr(self.taxonomy, 'level_names_zh', {}).get(level, [])
+        if 0 <= cid < len(names_zh) and names_zh[cid]:
+            return names_zh[cid]
         names = self.taxonomy.level_names.get(level, [])
         return names[cid] if 0 <= cid < len(names) else f"{level}_{cid}"
+
+    def _get_depth(self, level: str, cid: int) -> int:
+        depths = getattr(self.taxonomy, 'level_depths', {}).get(level, [])
+        return depths[cid] if 0 <= cid < len(depths) else -1
+
+    def _get_parent_fallback(self, level: str, cid: int, logits: torch.Tensor = None):
+        """物种级置信度不足时，退回父节点并提取其置信度"""
+        if level != 'species':
+            return None
+        level_ids = self.taxonomy.level_ids.get(level, [])
+        if cid >= len(level_ids):
+            return None
+        node_id = level_ids[cid]
+        node = self.taxonomy.get_node(node_id)
+        if node is None or node.parent is None or node.parent.level == 'root':
+            return None
+        parent = node.parent
+        parent_cid = self.taxonomy.get_level_idx(level, parent.id)
+        if parent_cid < 0:
+            return None
+        zh_name = self._name(level, parent_cid)
+        parent_depth = parent._depth
+        # 从 softmax 中取父节点的置信度
+        parent_conf = 0.0
+        if logits is not None:
+            probs = F.softmax(logits, dim=1)
+            parent_conf = round(probs[0, parent_cid].item() * 100, 2)
+        return {
+            'level': level,
+            'name': zh_name,
+            'class_id': parent_cid,
+            'confidence': parent_conf,
+            'top_k': [],
+            'passed_threshold': True,
+            'depth': parent_depth,
+            'fallback': True,
+        }
 
     @torch.no_grad()
     def predict_batch(self, images: torch.Tensor, top_k_per_level: int = 3):

@@ -72,13 +72,19 @@ class SingleRecognitionPage(QWidget):
         self.upload_component.images_ready.connect(self._on_images_ready)
         left_layout.addWidget(self.upload_component, 1)
 
-        # 识别按钮
+        # 按钮行：选择图片 + 清空 + 开始识别
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        btn_row.addWidget(self.upload_component.btn_upload)
+        btn_row.addWidget(self.upload_component.btn_clear)
+
         self.btn_recognize = QPushButton("🚀 开始识别")
         self.btn_recognize.setObjectName("PrimaryButton")
         self.btn_recognize.setCursor(Qt.PointingHandCursor)
         self.btn_recognize.setEnabled(False)
         self.btn_recognize.clicked.connect(self._run_recognition)
-        left_layout.addWidget(self.btn_recognize)
+        btn_row.addWidget(self.btn_recognize)
+        left_layout.addLayout(btn_row)
 
         # 进度条
         self.progress_bar = QProgressBar()
@@ -111,16 +117,19 @@ class SingleRecognitionPage(QWidget):
         self._update_recognize_button()
 
     def _update_recognize_button(self):
-        """根据模型状态和图片状态更新识别按钮"""
-        has_image = len(self.upload_component.get_file_paths()) > 0
+        """根据模型状态更新识别按钮（即使无图片也可点击以弹出文件选择）"""
         model_ready = ModelManager.get().is_ready
-        self.btn_recognize.setEnabled(has_image and model_ready)
+        self.btn_recognize.setEnabled(model_ready)
 
     # ===== 识别 =====
     def _run_recognition(self):
         images = self.upload_component.get_images()
         if not images:
-            return
+            # 没有图片时自动弹出文件选择对话框
+            self.upload_component._on_click_upload()
+            images = self.upload_component.get_images()
+            if not images:
+                return  # 用户取消选择
 
         # 检查模型
         manager = ModelManager.get()

@@ -1270,15 +1270,17 @@ class TaxonomyTreeWidget(QWidget):
             'species': '🐦', 'visual': '👁️',
         }
         level_labels = {
-            'order': '目', 'family': '科', 'genus': '属',
+            'order': '纲', 'family': '目', 'genus': '科',
             'species': '种', 'visual': '视觉类别',
         }
+        depth_labels = {3: '科', 4: '属', 5: '种'}
 
         for i, node in enumerate(self._taxonomy_path):
             level = node.get('level', '')
             name = node.get('name', '?')
             confidence = node.get('confidence', 0.0)
             passed = node.get('passed_threshold', True)
+            depth = node.get('depth', -1)
 
             is_stopped = (level == self._stopped_at and not passed)
 
@@ -1288,14 +1290,20 @@ class TaxonomyTreeWidget(QWidget):
             row_layout.setContentsMargins(i * 16 + 4, 2, 4, 2)
             row_layout.setSpacing(6)
 
-            # 图标
-            icon = level_icons.get(level, '❓')
+            # 图标: species 层根据深度选图标
+            if level == 'species' and depth in depth_labels:
+                icon = {'科': '📁', '属': '🌿', '种': '🐦'}.get(depth_labels[depth], '🐦')
+            else:
+                icon = level_icons.get(level, '❓')
             icon_label = QLabel(icon)
             icon_label.setStyleSheet("font-size: 16px; border: none;")
             row_layout.addWidget(icon_label)
 
-            # 层级标签
-            lbl = level_labels.get(level, level)
+            # 层级标签: species 层根据深度显示科/属/种
+            if level == 'species' and depth in depth_labels:
+                lbl = depth_labels[depth]
+            else:
+                lbl = level_labels.get(level, level)
             level_label = QLabel(lbl)
             level_label.setStyleSheet(f"""
                 color: {TEXT_SECONDARY};
@@ -1305,7 +1313,11 @@ class TaxonomyTreeWidget(QWidget):
             row_layout.addWidget(level_label)
 
             # 名称
-            if is_stopped:
+            is_fallback = node.get('fallback', False)
+            if is_fallback:
+                name_color = WARNING_COLOR
+                name_suffix = " (退回上级)" if confidence == 0 else ""
+            elif is_stopped:
                 name_color = WARNING_COLOR
                 name_suffix = " (不确定)"
             elif not passed:
@@ -1326,8 +1338,15 @@ class TaxonomyTreeWidget(QWidget):
             row_layout.addStretch()
 
             # 置信度
-            conf_color = SUCCESS_COLOR if passed else WARNING_COLOR
-            conf_label = QLabel(f"{confidence:.1f}%")
+            if is_fallback and confidence > 0:
+                conf_color = WARNING_COLOR
+                conf_label = QLabel(f"{confidence:.1f}%")
+            elif is_fallback:
+                conf_label = QLabel("—")
+                conf_color = TEXT_SECONDARY
+            else:
+                conf_color = SUCCESS_COLOR if passed else WARNING_COLOR
+                conf_label = QLabel(f"{confidence:.1f}%")
             conf_label.setStyleSheet(f"""
                 color: {conf_color};
                 font-size: 13px;
@@ -1353,7 +1372,11 @@ class TaxonomyTreeWidget(QWidget):
                 stop_row = QWidget()
                 stop_layout = QHBoxLayout(stop_row)
                 stop_layout.setContentsMargins(i * 16 + 4, 0, 4, 0)
-                stop_msg = QLabel("── 置信度不足，分类停止于此 ──")
+                if is_fallback:
+                    msg = "── 置信度不足，退回上级分类 ──"
+                else:
+                    msg = "── 置信度不足，分类停止于此 ──"
+                stop_msg = QLabel(msg)
                 stop_msg.setStyleSheet(f"""
                     color: {WARNING_COLOR};
                     font-size: 11px;

@@ -91,7 +91,7 @@ class SettingsPage(QWidget):
         self._form_layouts.append(info_form)
 
         for label_text, default_val in [
-            ("模型架构:", "ResNet50 + SE-Attention"),
+            ("模型架构:", "检测中..."),
             ("类别数:", str(NUM_CLASSES)),
             ("输入尺寸:", f"{INPUT_SIZE}×{INPUT_SIZE}"),
         ]:
@@ -101,6 +101,8 @@ class SettingsPage(QWidget):
             self._set_scaled_font(val, BASE_LABEL_FONT)
             self._form_labels.extend([lbl, val])
             info_form.addRow(lbl, val)
+            if label_text == "模型架构:":
+                self._arch_label = val
 
         self._param_label = QLabel("-")
         self._add_form_row(info_form, "参数量:", self._param_label)
@@ -446,6 +448,7 @@ class SettingsPage(QWidget):
             self._btn_unload.setEnabled(True)
 
             info = manager.get_model_info()
+            self._arch_label.setText(info.get("model_name", "-"))
             self._param_label.setText(format_parameter_count(info.get("param_total", 0)))
             self._device_label.setText(info.get("device", "-"))
             meta = info.get("checkpoint_meta", {})
@@ -456,6 +459,7 @@ class SettingsPage(QWidget):
             self._model_status_label.setText("❌ 模型未加载")
             self._apply_status_style(self._model_status_label, DANGER_COLOR)
             self._btn_unload.setEnabled(False)
+            self._arch_label.setText("-")
             self._param_label.setText("-")
             self._device_label.setText("-")
             self._acc_label.setText("-")

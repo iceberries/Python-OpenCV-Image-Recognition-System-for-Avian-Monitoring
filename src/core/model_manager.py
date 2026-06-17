@@ -616,8 +616,13 @@ class ModelManager(QObject):
         Returns:
             模型信息字典
         """
+        model_arch = {
+            "flat": "ResNet50 + SE-Attention",
+            "hierarchical": "ResNet101 + Hierarchy",
+        }.get(self._model_type, "Unknown")
         info = {
-            "model_name": "ResNet50 + SE-Attention",
+            "model_name": model_arch,
+            "model_type": self._model_type,
             "num_classes": NUM_CLASSES,
             "input_size": INPUT_SIZE,
             "device": self._device,

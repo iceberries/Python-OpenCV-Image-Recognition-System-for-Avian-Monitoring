@@ -150,11 +150,10 @@ class TaxonomyTree:
                 parent.children.append(child)
                 child.parent = parent
 
-        # --- 5. 找根（若无单一根，创建虚拟根节点） ---
+        # --- 5. 使用文件自带的 Aves 根节点（保持旧 checkpoint 兼容） ---
         self.root = self._find_root()
         if self.root is None:
-            # 多个顶层节点（如 13 个目各自独立），创建虚拟根
-            virtual_root_id = max(all_ids) + 1
+            virtual_root_id = max(all_ids) + 1 if all_ids else 1
             self.root = TaxonNode(virtual_root_id, "Aves")
             self.root.level = "root"
             self.nodes[virtual_root_id] = self.root
@@ -167,6 +166,7 @@ class TaxonomyTree:
         self._infer_cub_levels()
         self.LEVEL_ORDER = ['root', 'order', 'family', 'species']
         self._build_index_maps()
+        self._load_translations()
 
         for node in self.nodes.values():
             if not node.children:
@@ -174,11 +174,34 @@ class TaxonomyTree:
 
         return self
 
+    def _load_translations(self):
+        """从 translations_zh.json 加载中文翻译。
+        由于旧分类学偏移（family 实际是 order，species 包含 family+species），
+        翻译时做层级映射。"""
+        from src.i18n import I18n
+        i18n = I18n.load(self.hierarchy_dir)
+        self.level_names_zh: Dict[str, List[str]] = {}
+        # 翻译映射：model_level → json_level
+        trans_map = {'order': 'order', 'family': 'order', 'species': 'species'}
+        for lvl in self.LEVEL_ORDER:
+            if lvl == 'root':
+                continue
+            src = trans_map.get(lvl, lvl)
+            names = self.level_names.get(lvl, [])
+            self.level_names_zh[lvl] = []
+            for name in names:
+                zh = i18n.t(src, name)
+                if zh == name:
+                    # 回退：species 级也查 family 翻译
+                    zh = i18n.t('family', name)
+                self.level_names_zh[lvl].append(zh)
+
     def _build_index_maps(self):
         """为每个层级构建 0-indexed 类别ID映射"""
         self.level_ids = {lvl: [] for lvl in self.LEVEL_ORDER if lvl != 'root'}
         self.level_names = {lvl: [] for lvl in self.LEVEL_ORDER if lvl != 'root'}
         self.level_to_idx = {lvl: {} for lvl in self.LEVEL_ORDER if lvl != 'root'}
+        self.level_depths: Dict[str, List[int]] = {}
         for node in sorted(self.nodes.values(), key=lambda n: n.id):
             if node.level == 'root':
                 continue
@@ -186,6 +209,11 @@ class TaxonomyTree:
             self.level_ids[lvl].append(node.id)
             self.level_names[lvl].append(node.name)
             self.level_to_idx[lvl][node.id] = len(self.level_ids[lvl]) - 1
+        # 记录 species 层各节点的树深度
+        if 'species' in self.level_ids:
+            self.level_depths['species'] = [
+                self.nodes[nid]._depth for nid in self.level_ids['species']
+            ]
 
     def _infer_cub_levels(self):
         """root→order→family→species"""
